@@ -1,0 +1,35 @@
+##########################################################################
+# Copyright 2014 RDK Management
+#
+# This library is free software; you can redistribute it and/or
+# modify it under the terms of the GNU Library General Public
+# License as published by the Free Software Foundation, version 2
+# of the license.
+#
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Library General Public License for more details.
+#
+# You should have received a copy of the GNU Library General Public
+# License along with this library; if not, write to the
+# Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
+# Boston, MA 02110-1301, USA.
+##########################################################################
+
+Package: gst-plugins-rdk
+Version: 1.99+git0+008c18fcb0-r0.0
+Description: RDK Gstreamer plugins
+ RDK gst-plugins. These are the plugins encoding and decoding gstreamer
+ elements. Theere are plugins available for dtcp and aes
+ encoding/decoding. DTCP is used for Data exchange between the home
+ networking elements. AES is used for interworking with the recorded data
+ or the local tsb.
+Section: console/utils
+Priority: optional
+Maintainer: CPE SI Yocto Team <CCP_CPESI-YOCTO@cable.comcast.com>
+License: CLOSED
+Architecture: mips32el
+OE: gst-plugins-rdk
+Depends: libgcc1 (>= 4.8.2), libxml2 (>= 2.9.1), libz1 (>= 1.2.8), libgcrypt11 (>= 1.5.3), rmfgeneric (>= 1.99+git0+d5b27b8651), libffi6 (>= 3.0.13), log4c (>= 1.2.3), libstdc++6 (>= 4.8.2), libglib-2.0-0 (>= 2.38.2), rmfosal (>= 1.99+git0+d5b27b8651), broadcom-refsw (>= trinity-unified-13.2), libcap2 (>= 2.22), libdvrmgrsoc0 (>= 1.99+gitr0+d07a96306b), libtinyxml2.6.2 (>= 2.6.2), libsocinit0 (>= 1.99+gitr0+d07a96306b), libgpg-error0 (>= 1.12), librdkloggers0 (>= 1.99+gitr0+e4b6f49772), libc6 (>= 2.19), gstreamer (>= 0.10.36), libcurl4 (>= 7.35.0), libgnutls26 (>= 2.12.23), libuuid1 (>= 2.24.1), libtasn1-6 (>= 3.4)
+Source: git://gerrit.teamccp.com:29418/rdk/components/generic/gst-plugins-rdk/generic;protocol=ssh;branch=master

@@ -1,0 +1,177 @@
+/*
+ * Copyright 2018 RDK Management
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation, version 2
+ * of the license.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+*/
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#include <gst/gst.h>
+
+#include "playersinkbinpmtinfo.h"
+
+enum
+{
+	PROP_0,
+	PROP_PROGRAM_NO,
+	PROP_VERSION_NO,
+	PROP_PCR_PID,
+	PROP_STREAMINFO
+};
+
+#ifdef USE_GST1
+#define playersinkbin_pmt_info_parent_class parent_class
+G_DEFINE_TYPE (PlayerSinkbinPmtInfo, playersinkbin_pmt_info, G_TYPE_OBJECT);
+#else
+GST_BOILERPLATE (PlayerSinkbinPmtInfo, playersinkbin_pmt_info, GObject, G_TYPE_OBJECT);
+#endif
+
+static void playersinkbin_pmt_info_finalize (GObject *object);
+static void playersinkbin_pmt_info_set_property (GObject * object, guint prop_id,
+        const GValue * value, GParamSpec * spec);
+static void playersinkbin_pmt_info_get_property (GObject * object, guint prop_id,
+        GValue * value, GParamSpec * spec);
+
+#ifndef USE_GST1
+static void
+playersinkbin_pmt_info_base_init (gpointer klass)
+{
+}
+#endif
+
+static void
+playersinkbin_pmt_info_class_init (PlayerSinkbinPmtInfoClass *klass)
+{
+#ifdef USE_GST1
+	GObjectClass *gobject_klass = G_OBJECT_CLASS (klass);
+#else
+	GObjectClass *gobject_klass = (GObjectClass *) klass;
+#endif
+
+	gobject_klass->finalize = playersinkbin_pmt_info_finalize;
+	gobject_klass->set_property = playersinkbin_pmt_info_set_property;
+	gobject_klass->get_property = playersinkbin_pmt_info_get_property;
+
+	g_object_class_install_property (gobject_klass, PROP_PROGRAM_NO,
+	                                 g_param_spec_uint ("program-number", "Program Number",
+	                                         "Program Number for this program", 0, G_MAXUINT16, 1,
+	                                         G_PARAM_READABLE));
+
+	g_object_class_install_property (gobject_klass, PROP_PCR_PID,
+	                                 g_param_spec_uint ("pcr-pid", "PID carrying the PCR for this program",
+	                                         "PID which carries the PCR for this program", 1, G_MAXUINT16, 1,
+	                                         G_PARAM_READABLE));
+
+	g_object_class_install_property (gobject_klass, PROP_STREAMINFO,
+	                                 g_param_spec_value_array ("stream-info",
+	                                         "GValueArray containing GObjects with properties",
+	                                         "Array of GObjects containing information about the program streams",
+	                                         g_param_spec_object ("flu-pmt-streaminfo", "FluPMTStreamInfo",
+	                                                 "Fluendo TS Demuxer PMT Stream info object",
+	                                                 PLAYERSINKBIN_TYPE_PMT_STREAM_INFO, G_PARAM_READABLE),
+	                                         G_PARAM_READABLE));
+
+	g_object_class_install_property (gobject_klass, PROP_VERSION_NO,
+	                                 g_param_spec_uint ("version-number", "Version Number",
+	                                         "Version number of this program information", 0, G_MAXUINT8, 1,
+	                                         G_PARAM_READABLE));
+}
+
+static void
+#ifdef USE_GST1
+playersinkbin_pmt_info_init (PlayerSinkbinPmtInfo *pmt_info)
+#else
+playersinkbin_pmt_info_init (PlayerSinkbinPmtInfo *pmt_info, PlayerSinkbinPmtInfoClass *klass)
+#endif
+{
+	pmt_info->streams = g_value_array_new (0);
+}
+
+PlayerSinkbinPmtInfo *playersinkbin_pmt_info_new (guint16 program_no, guint16 pcr_pid,
+                                  guint8 version_no)
+{
+	PlayerSinkbinPmtInfo *info;
+
+	info = g_object_new (PLAYERSINKBIN_TYPE_PMT_INFO, NULL);
+
+	info->program_no = program_no;
+	info->pcr_pid = pcr_pid;
+	info->version_no = version_no;
+
+	return info;
+}
+
+static void
+playersinkbin_pmt_info_finalize (GObject *object)
+{
+	PlayerSinkbinPmtInfo *info = PLAYERSINKBIN_PMT_INFO (object);
+
+	g_value_array_free (info->streams);
+
+	G_OBJECT_CLASS (parent_class)->finalize (object);
+}
+
+static void playersinkbin_pmt_info_set_property (GObject * object, guint prop_id,
+        const GValue * value, GParamSpec * spec)
+{
+	g_return_if_fail (PLAYERSINKBIN_IS_PMT_INFO (object));
+
+	/* No settable properties */
+	G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, spec);
+}
+
+static void playersinkbin_pmt_info_get_property (GObject * object, guint prop_id,
+        GValue * value, GParamSpec * spec)
+{
+	PlayerSinkbinPmtInfo *pmt_info;
+
+	g_return_if_fail (PLAYERSINKBIN_IS_PMT_INFO (object));
+
+	pmt_info = PLAYERSINKBIN_PMT_INFO (object);
+
+	switch (prop_id) {
+	case PROP_PROGRAM_NO:
+		g_value_set_uint (value, pmt_info->program_no);
+		break;
+	case PROP_PCR_PID:
+		g_value_set_uint (value, pmt_info->pcr_pid);
+		break;
+	case PROP_STREAMINFO:
+		g_value_set_boxed (value, pmt_info->streams);
+		break;
+	case PROP_VERSION_NO:
+		g_value_set_uint (value, pmt_info->version_no);
+		break;
+	default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, spec);
+		break;
+	}
+}
+
+void
+playersinkbin_pmt_info_add_stream (PlayerSinkbinPmtInfo *pmt_info, PlayerSinkbinPmtStreamInfo *stream)
+{
+	GValue v = { 0, };
+
+	g_return_if_fail (PLAYERSINKBIN_IS_PMT_INFO (pmt_info));
+	g_return_if_fail (PLAYERSINKBIN_IS_PMT_STREAM_INFO (stream));
+
+	g_value_init (&v, G_TYPE_OBJECT);
+	g_value_take_object (&v, stream);
+	g_value_array_append (pmt_info->streams, &v);
+}
+

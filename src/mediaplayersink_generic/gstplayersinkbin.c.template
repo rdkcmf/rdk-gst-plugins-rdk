@@ -1,0 +1,753 @@
+/*
+ * Copyright 2013 RDK Management
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation, version 2
+ * of the license.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+*/
+
+/**
+ * SECTION:element-playersinkbin
+ *
+ * #GstBin that constructs a demux and decode pipeline for TS source using SOC gstreamer
+ * demuxers and decoders for use by RMF MediaPlayerSink
+ *
+ * <title>Example launch line</title>
+ * |[
+ * gst-launch filesrc location="input.ts" ! playersinkbin
+ * ]|
+ */
+
+#ifdef HAVE_CONFIG_H
+#  include <config.h>
+#endif
+
+#include <gst/gst.h>
+
+#include "gstplayersinkbin.h"
+#include "playersinkbinpmtinfo.h"
+#include <string.h>
+
+#ifndef VERSION
+#define VERSION "1.0"
+#endif
+
+/* GST Enums for Plane and Resolution */
+
+GType
+playersink_gst_plane_get_type (void)
+{
+	static GType playersink_gst_plane_type = 0;
+	static const GEnumValue plane_types[] = {
+		{1, "Plane 1", "Pixel Plane 1"},
+		{2, "Plane 2", "Pixel Plane 2"},
+		{3, "Plane 3", "Pixel Plane 3"},
+		{4, "Plane 4", "Pixel Plane 4"},
+		{10, NULL, NULL}
+	};
+
+	if (!playersink_gst_plane_type) {
+		playersink_gst_plane_type =
+		    g_enum_register_static ("GstPlane", plane_types);
+	}
+	return playersink_gst_plane_type;
+}
+
+GType
+playersink_gst_resolution_get_type (void)
+{
+	static GType playersink_gst_resolution_type = 0;
+	static const GEnumValue resolution_types[] = {
+		{-1, "None to be configured", "none"},
+		{0, "480 interlaced at 60 Hz", "480i"},
+		{1, "480 progressive at 60 Hz", "480p"},
+		{2, "576 interlaced at 50 Hz", "576i"},
+		{3, "576 progressive at 50 Hz", "576p"},
+		{4, "720 progressive at 60 Hz", "720p"},
+		{5, "720 progressive at 50 Hz", "720p50"},
+		{6, "1080 interlaced at 60 Hz", "1080i"},
+		{7, "1080 interlaced at 50 Hz", "1080i50"},
+		{8, "1080 progressive at 60 Hz", "1080p"},
+		{9, "1080 progressive at 50 Hz", "1080p50"},
+		{10, NULL, NULL}
+	};
+
+	if (!playersink_gst_resolution_type) {
+		playersink_gst_resolution_type =
+		    g_enum_register_static ("GstResolution", resolution_types);
+	}
+	return playersink_gst_resolution_type;
+}
+
+#define DEFAULT_PROGRAM_NUM 1
+#define DEFAULT_AVAILABLE_LANGUAGES "eng"
+#define DEFAULT_PREFERRED_LANGUAGE "eng"
+#define DEFAULT_SHOW_LAST_FRAME 0
+#define DEFAULT_VIDEO_RECTANGLE "0,0,0,0"
+#define DEFAULT_VIDEO_DECODER_HANDLE NULL
+#define DEFAULT_PLANE 1
+#define DEFAULT_PLAY_SPEED 1
+#define DEFAULT_CURRENT_POSITION 0
+#define DEFAULT_RESOLUTION -1
+#define DEFAULT_VIDEO_MUTE 0
+#define DEFAULT_AUDIO_MUTE 0
+#define DEFAULT_VOLUME 1.0
+
+/* SOC CHANGES: Names of gstreamer Elements to be contained in the bin,add/remove appropriately based on platform */
+const char DEMUX[] = "socdemux";
+const char VDEC[] = "socvideodec";
+const char VSINK[] = "socvideosink";
+const char ADEC[] = "socaudiodec";
+const char ASINK[] = "socaudiosink";
+/* End SOC CHANGES */
+
+#define GSTPLAYERSINKBIN_EVENT_HAVE_VIDEO 0x01
+#define GSTPLAYERSINKBIN_EVENT_HAVE_AUDIO 0x02
+
+static void gst_decode_bin_dispose (GObject * object);
+#ifndef USE_GST1
+static void gst_decode_bin_finalize (GObject * object);
+#endif
+
+GST_DEBUG_CATEGORY_STATIC (gst_player_sinkbin_debug);
+#define GST_CAT_DEFAULT gst_player_sinkbin_debug
+
+static GstStaticPadTemplate  playersink_bin_sink_template =
+    GST_STATIC_PAD_TEMPLATE ("sink",
+                             GST_PAD_SINK,
+                             GST_PAD_ALWAYS,
+                             GST_STATIC_CAPS("video/mpegts"));
+
+/* Properties */
+enum
+{
+	PROP_0,
+	PROP_PROGRAM_NUM,
+	PROP_PMT_INFO,
+	PROP_AVAILABLE_LANGUAGES,
+	PROP_PREFERRED_LANGUAGE,
+	PROP_VIDEO_DECODE_HANDLE,
+	PROP_SHOW_LAST_FRAME,
+	PROP_VIDEO_RECTANGLE,
+	PROP_VIDEO_MUTE,
+	PROP_PLANE,
+	PROP_PLAY_SPEED,
+	PROP_CURRENT_POSITION,
+	PROP_RESOLUTION,
+	PROP_AUDIO_MUTE,
+	PROP_VOLUME,
+	PROP_LAST
+};
+
+enum
+{
+	SIGNAL_PLAYERSINKBIN,
+	LAST_SIGNAL
+};
+
+static guint gst_player_sinkbin_signals[LAST_SIGNAL] = { 0 };
+static GstBinClass *parent_class;
+static GstStaticCaps default_raw_caps = GST_STATIC_CAPS (DEFAULT_RAW_CAPS);
+
+static void gst_player_sinkbin_set_property (GObject * object, guint prop_id,
+#ifdef USE_GST1
+        const GValue * value, GParamSpec * pspec);
+#else
+        GValue * value, GParamSpec * pspec);
+#endif
+static void gst_player_sinkbin_get_property (GObject * object, guint prop_id,
+        GValue * value, GParamSpec * pspec);
+
+/*static void gst_player_sinkbin_handle_message (GstBin * bin, GstMessage * message);
+static GstStateChangeReturn gst_player_sinkbin_change_state (GstElement * element,
+    GstStateChange transition);
+*/
+
+
+static gboolean gst_player_sinkbin_sink_event (GstPad * pad, GstObject * parent, GstEvent * event);
+
+/* GObject vmethod implementations */
+
+/* initialize the plugin's class */
+static void
+gst_player_sinkbin_class_init (GstPlayerSinkBinClass * klass)
+{
+	GObjectClass *gobject_klass;
+	GstElementClass *gstelement_klass;
+	GstBinClass *gstbin_klass;
+
+	gobject_klass = (GObjectClass *) klass;
+	gstelement_klass = (GstElementClass *) klass;
+	gstbin_klass = (GstBinClass *) klass;
+
+	parent_class = g_type_class_peek_parent (klass);
+
+	gobject_klass->dispose = gst_decode_bin_dispose;
+#ifndef USE_GST1
+	gobject_klass->finalize = gst_decode_bin_finalize;
+#endif
+	gobject_klass->set_property = gst_player_sinkbin_set_property;
+	gobject_klass->get_property = gst_player_sinkbin_get_property;
+
+	/* Install Properties for the bin */
+	g_object_class_install_property (gobject_klass, PROP_PROGRAM_NUM,
+	                                 g_param_spec_uint("program-num", "program-num",
+	                                         "Program number to set",
+	                                         1, G_MAXUINT16, DEFAULT_PROGRAM_NUM,
+	                                         G_PARAM_READWRITE));
+
+	g_object_class_install_property (gobject_klass, PROP_AVAILABLE_LANGUAGES,
+	                                 g_param_spec_string("available-languages", "available-languages",
+	                                         "Available languages in the program as a comma separated list",
+	                                         DEFAULT_AVAILABLE_LANGUAGES,
+	                                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property (gobject_klass, PROP_PREFERRED_LANGUAGE,
+	                                 g_param_spec_string("preferred-language", "preferred-language",
+	                                         "Preferred language to be set",
+	                                         DEFAULT_PREFERRED_LANGUAGE,
+	                                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property (gobject_klass, PROP_PMT_INFO,
+	      g_param_spec_object ("pmt-info","pmt information",
+	          "GObject with properties containing information from the TS PMT "
+	          "about the currently selected program,its streams and descriptors",
+	          PLAYERSINKBIN_TYPE_PMT_INFO, G_PARAM_READABLE));
+
+
+	g_object_class_install_property (gobject_klass, PROP_VIDEO_DECODE_HANDLE,
+	                                 g_param_spec_pointer ("video-decode-handle","video-decode-handle",
+	                                         "Video decoder handle in use",
+	                                         G_PARAM_READABLE));
+
+
+	g_object_class_install_property (gobject_klass, PROP_SHOW_LAST_FRAME,
+	                                 g_param_spec_boolean ("show-last-frame", "show-last-frame",
+	                                         "Keep displaying the last frame rather than a black one",
+	                                         DEFAULT_SHOW_LAST_FRAME,
+	                                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property (gobject_klass, PROP_VIDEO_RECTANGLE,
+	                                 g_param_spec_string ("rectangle", "Destination rectangle",
+	                                         "The destination rectangle, (0,0,0,0) full screen",
+	                                         DEFAULT_VIDEO_RECTANGLE,
+	                                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property (gobject_klass, PROP_PLANE,
+	                                 g_param_spec_enum ("plane",
+	                                         "Plane used for rendering",
+	                                         "Define the Plane to be used by the platform ",
+	                                         GST_TYPE_PLANE,
+	                                         DEFAULT_PLANE, G_PARAM_READWRITE));
+
+	g_object_class_install_property (gobject_klass, PROP_PLAY_SPEED,
+	                                 g_param_spec_float("play-speed", "play speed",
+	                                         "Play Speed to be set or current play speed",
+	                                         G_MINFLOAT, G_MAXFLOAT, DEFAULT_PLAY_SPEED,
+	                                         G_PARAM_READWRITE));
+
+	g_object_class_install_property (gobject_klass, PROP_CURRENT_POSITION,
+	                                 g_param_spec_double("current-position", "current position",
+	                                         "Current play position in the stream",
+	                                         G_MINDOUBLE, G_MAXDOUBLE, DEFAULT_PROGRAM_NUM,
+	                                         G_PARAM_READWRITE));
+
+	g_object_class_install_property (gobject_klass, PROP_RESOLUTION,
+	                                 g_param_spec_enum ("resolution",
+	                                         "Resolution to be set",
+	                                         "Define the resolution to be used",
+	                                         GST_TYPE_RESOLUTION,
+	                                         DEFAULT_RESOLUTION, G_PARAM_READWRITE));
+
+	g_object_class_install_property (gobject_klass, PROP_VIDEO_MUTE,
+	                                 g_param_spec_boolean ("video-mute", "video-mute",
+	                                         "mute/unmute video",
+	                                         DEFAULT_VIDEO_MUTE,
+	                                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property (gobject_klass, PROP_AUDIO_MUTE,
+	                                 g_param_spec_boolean ("audio-mute", "audio-mute",
+	                                         "mute/unmute audio",
+	                                         DEFAULT_AUDIO_MUTE,
+	                                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property (gobject_klass, PROP_VOLUME,
+	                                 g_param_spec_double("volume", "volume",
+	                                         "Audio volume to be set",
+	                                         1.0, G_MAXDOUBLE, DEFAULT_VOLUME,
+	                                         G_PARAM_READWRITE));
+
+
+	gst_element_class_add_pad_template (gstelement_klass,
+	                                    gst_static_pad_template_get (&playersink_bin_sink_template));
+
+	gst_element_class_set_details_simple (gstelement_klass,
+     "Player Sink Bin", "Demux/Decoder",
+     "Demux and decode mpegts",
+     "Comcast");
+	/* gstelement_klass->change_state =
+	     GST_DEBUG_FUNCPTR (gst_player_sinkbin_change_state);
+
+	 gstbin_klass->handle_message =
+	     GST_DEBUG_FUNCPTR (gst_player_sinkbin_handle_message);
+	*/
+  /**
+   * Signal that the video/audio has been reached. This signal is emited from
+   * the onDemuxSrcPadAdded thread.
+   */
+    gst_player_sinkbin_signals[SIGNAL_PLAYERSINKBIN] =
+        g_signal_new ("event-callback", G_TYPE_FROM_CLASS (gstelement_klass),
+        (GSignalFlags)(G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION),
+        G_STRUCT_OFFSET (GstPlayerSinkBinClass, playersinkbinstatuscb), NULL, NULL,
+#ifdef USE_GST1
+        g_cclosure_marshal_VOID__INT, G_TYPE_NONE, 1, G_TYPE_INT);
+#else
+        gst_marshal_VOID__INT, G_TYPE_NONE, 1, G_TYPE_INT);
+#endif
+}
+
+/* SOC CHANGES: Dynamic call back from demux element to link audio and video source pads to downstream decode elements
+ * For video, identify the video encoder type(h264/mpeg) and link appropriate decoder element if soc has differenti
+ * elements for h264 and mpeg. On receiving video pad callback emit GSTPLAYERSINKBIN_EVENT_HAVE_VIDEO signal 
+ * such as g_signal_emit (G_OBJECT (playersinkbin), gst_player_sinkbin_signals[SIGNAL_PLAYERSINKBIN], 0, GSTPLAYERSINKBIN_EVENT_HAVE_VIDEO); 
+ * For audio, link the audio pad containing the preferred language if multiple audio language streams are present.
+ * On receiving Audio pad callback emit GSTPLAYERSINKBIN_EVENT_HAVE_AUDIO signal. 
+ * such as g_signal_emit (G_OBJECT (playersinkbin), gst_player_sinkbin_signals[SIGNAL_PLAYERSINKBIN], 0, GSTPLAYERSINKBIN_EVENT_HAVE_AUDIO);
+ */
+void onDemuxSrcPadAdded(GstElement* element, GstPad *demux_src_pad, gpointer data)
+{
+}
+/* END SOC CHANGES */
+
+/* initialize the new element
+ * instantiate pads and add them to element
+ * set pad calback functions
+ * initialize instance structure
+ */
+static void
+gst_player_sinkbin_init (GstPlayerSinkBin* sinkbin)
+{
+	GstPad *pad;
+	GstPad *gpad;
+	GstPadTemplate *pad_tmpl;
+
+	/* Initialize properties */
+
+	sinkbin->prog_no = DEFAULT_PROGRAM_NUM;
+	strncpy(sinkbin->available_languages,DEFAULT_AVAILABLE_LANGUAGES,sizeof(DEFAULT_AVAILABLE_LANGUAGES));
+	strncpy(sinkbin->preffered_language,DEFAULT_PREFERRED_LANGUAGE,sizeof(DEFAULT_PREFERRED_LANGUAGE));
+	sinkbin->show_last_frame = DEFAULT_SHOW_LAST_FRAME;
+	sinkbin->video_decode_handle = DEFAULT_VIDEO_DECODER_HANDLE;
+	strncpy(sinkbin->video_rectangle,DEFAULT_VIDEO_RECTANGLE,sizeof(DEFAULT_VIDEO_RECTANGLE));
+	sinkbin->plane = DEFAULT_PLANE;
+	sinkbin->video_mute = DEFAULT_VIDEO_MUTE;
+	sinkbin->play_speed = DEFAULT_PLAY_SPEED;
+	sinkbin->current_position = DEFAULT_CURRENT_POSITION;
+	sinkbin->resolution = DEFAULT_RESOLUTION;
+	sinkbin->audio_mute = DEFAULT_AUDIO_MUTE;
+	sinkbin->volume = DEFAULT_VOLUME;
+
+
+	/* SOC CHANGES: create and add SOC gstreamer element factories in to the bin*/
+	sinkbin->demux = gst_element_factory_make(DEMUX, "player_demux");
+	if (!sinkbin->demux)
+	{
+		 GST_ERROR_OBJECT(sinkbin,"playersinkbin : Failed to instantiate demuxer (%s)", DEMUX);
+		return;
+	}
+	g_signal_connect(sinkbin->demux, "pad-added", G_CALLBACK (onDemuxSrcPadAdded), sinkbin);
+
+	/* Create video decoding pipeline factories */
+	sinkbin->video_decoder = gst_element_factory_make(VDEC, "player_vdec");
+	sinkbin->video_sink = gst_element_factory_make(VSINK, "player_vsink");
+	if (!sinkbin->video_decoder || !sinkbin->video_sink)
+	{
+		if (!sinkbin->video_decoder)   GST_ERROR_OBJECT(sinkbin,"playersinkbin : Failed to instantiate video decoder (%s)\n", VDEC);
+		if (!sinkbin->video_sink)   GST_ERROR_OBJECT(sinkbin,"playersinkbin : Failed to instantiate video sink (%s)\n", VSINK);
+		return;
+	}
+
+	/* Create audio decoding pipeline factories */
+	sinkbin->audio_decoder = gst_element_factory_make(ADEC, "player_adec");
+	sinkbin->audio_sink = gst_element_factory_make(ASINK, "player_asink");
+	if (!sinkbin->audio_decoder || !sinkbin->audio_sink)
+	{
+		 GST_ERROR_OBJECT(sinkbin,"playersinkbin : Failed to instantiate audio decoder (%s)\n", ASINK);
+		return;
+	}
+
+	gst_bin_add_many(GST_BIN(sinkbin),sinkbin->demux,sinkbin->video_decoder,sinkbin->video_sink,sinkbin->audio_sink,NULL);
+
+	/* Link Video Decoding Elements*/
+	
+	if (!gst_element_link_many(sinkbin->video_decoder, sinkbin->video_sink, NULL))
+	{
+		 GST_ERROR_OBJECT(sinkbin,"playersinkbin : Failed to link video decode sink elements\n");
+		return;
+	}
+
+	/* Link Audio Decoding Elements */
+	if (!gst_element_link_many(sinkbin->audio_decoder, sinkbin->audio_sink, NULL))
+	{
+		 GST_ERROR_OBJECT(sinkbin,"Failed to link audio decode sink elements\n");
+		return;
+	}
+
+	/*END SOC CHANGES */
+
+	/* get the sinkpad of demux and ghost it */
+	pad = gst_element_get_static_pad (sinkbin->demux, "sink");
+
+	/* get the pad template */
+	pad_tmpl = gst_static_pad_template_get (&playersink_bin_sink_template);
+
+	/* ghost the sink pad to ourself */
+	gpad = gst_ghost_pad_new_from_template ("sink", pad, pad_tmpl);
+	gst_pad_set_active (gpad, TRUE);
+	gst_element_add_pad (GST_ELEMENT (sinkbin), gpad);
+
+	gst_object_unref (pad_tmpl);
+	gst_object_unref (pad);
+
+}
+
+static void gst_decode_bin_dispose (GObject * object)
+{
+	GstPlayerSinkBin* playersinkbin;
+
+	playersinkbin=GST_PLAYER_SINKBIN(object);
+
+	if (playersinkbin->caps)
+		gst_caps_unref (playersinkbin->caps);
+
+	G_OBJECT_CLASS (parent_class)->dispose (object);
+}
+
+#ifndef USE_GST1
+static void gst_decode_bin_finalize (GObject * object)
+{
+	GstPlayerSinkBin* playersinkbin;
+
+	playersinkbin=GST_PLAYER_SINKBIN(object);
+
+	G_OBJECT_CLASS (parent_class)->finalize (object);
+}
+#endif
+
+static void gst_player_sinkbin_get_pmtinfo(GstPlayerSinkBin* playersinkbin,GValue * value)
+{
+#ifndef USE_HW_DEMUX
+	        GObject *pmtinfo = NULL;
+            /* g_object_get(playersinkbin->demux,"pmt-info",&pmtinfo,NULL);
+		    g_value_take_object(value,pmtinfo); */
+
+		/*
+		PlayerSinkbinPmtInfo* playersink_pmtinfo;
+                guint program, pcr_pid,version,es_pid,es_type;
+                guint preffered_audio_pid = 0;
+		GValueArray *streaminfos = NULL;
+	  	GValueArray *descriptors = NULL;
+		PlayerSinkbinPmtInfo* playersink_pmtinfo;
+
+
+                g_object_get (pmtinfo, "program-number", &program, NULL);
+                g_object_get (pmtinfo, "pcr-pid", &pcr_pid, NULL);
+                g_object_get (pmtinfo, "pcr-pid", &version, NULL);
+
+		playersink_pmtinfo = playersinkbin_pmt_info_new(program,pcr_pid,version);
+                g_object_get (pmtinfo, "stream-info", &streaminfos, NULL);
+		g_object_get (pmtinfo, "descriptors", &descriptors, NULL);
+                for (i = 0 ; i < streaminfos->n_values; i++)
+                {
+                        value = g_value_array_get_nth (streaminfos, i);
+                        streaminfo = (GObject*) g_value_get_object (value);
+			g_object_get (streaminfo, "pid", &es_pid, NULL);
+	    		g_object_get (streaminfo, "stream-type", &es_type, NULL);
+	    		g_object_get (streaminfo, "languages", &languages, NULL);
+	    		g_object_get (streaminfo, "descriptors", &descriptors, NULL);
+		}
+		*/
+
+#endif
+}
+
+static void
+gst_player_sinkbin_get_property (GObject * object, guint prop_id,
+                                 GValue * value, GParamSpec * pspec)
+{
+	GstPlayerSinkBin *playersinkbin = GST_PLAYER_SINKBIN (object);
+
+	/* SOC CHANGES: Get appropriate properties from soc gstreamer elements */
+	switch (prop_id) {
+	case PROP_PROGRAM_NUM:
+		/* Get the current program number from demux element
+		 * Example: g_object_get(playersinkbin->demux,"program-number",&(playersinkbin->prog_no),NULL);
+		 */
+		g_value_set_uint(value,playersinkbin->prog_no);
+		break;
+	case PROP_PMT_INFO:
+		/* Get the pmt information from demux element. Assumes the pmt information from the soc element 
+		 * is of the form defined in playersinkbinpmtinfo.h.Change appropriately if not so. 
+		 */
+		//gst_player_sinkbin_get_pmtinfo(playersinkbin,value);
+		break;
+	case PROP_AVAILABLE_LANGUAGES:
+		/* Get the available languages filled after demux src pad callback
+		 */
+		g_value_set_string(value,playersinkbin->available_languages);
+		break;
+	case PROP_PREFERRED_LANGUAGE:
+		/* Send back the user set preffered language.No SOC specific change required here. Use this value on demux src pad callback to link appropriate language pid
+		*/
+		g_value_set_string(value,playersinkbin->preffered_language);
+		break;
+	case PROP_VIDEO_DECODE_HANDLE:
+		/* Get current decode handle from soc video decoder element
+		 * Example: g_object_get(playersinkbin->video_decoder,"decode-handle",&(playersinkbin->video_decode_handle),NULL);
+		*/
+		g_value_set_pointer(value, playersinkbin->video_decode_handle);
+		break;
+	case PROP_SHOW_LAST_FRAME:
+		/* Get current value of show last frame from soc gstreamer element
+		 * Example: g_object_get(playersinkbin->video_sink,"stop-keep-frame",&(playersinkbin->show_last_frame),NULL);
+		*/
+		g_value_set_boolean( value,playersinkbin->show_last_frame);
+		break;
+	case PROP_VIDEO_MUTE:
+		/* Get current value of video mute from soc gstreamer element
+		 * Example: g_object_get(playersinkbin->video_sink,"mute",&(playersinkbin->video_mute),NULL);
+		*/
+		g_value_set_boolean( value,playersinkbin->video_mute);
+		break;
+	case PROP_VIDEO_RECTANGLE:
+		/* Get current value of the rectange from soc gstreamer element
+		     * Example: g_object_get(playersinkbin->video_sink,"rectangle",&(playersinkbin->video_rectangle),NULL);
+		 */
+		g_value_set_string(value,playersinkbin->video_rectangle);
+		break;
+	case PROP_PLANE:
+		/* Get current plane used from soc element
+		 * Example: g_object_get(playersinkbin->video_sink,"plane",&plane,NULL);
+		 * Map the soc plane value to generic property of this bin if types are different
+		*/
+		g_value_set_enum(value,playersinkbin->plane);
+		break;
+	case PROP_PLAY_SPEED:
+		/* Get play speed from the soc specific gstreamer element if available. May not be needed at SOC level.
+		*/
+		g_value_set_float(value,playersinkbin->play_speed);
+		break;
+	case PROP_CURRENT_POSITION:
+		/* Get appropriate value from soc gstreamer element
+		 * Example: g_object_get(playersinkbin->video_sink,"currentPTS",&currentpts,NULL);
+		 * Map,if types/units are different,before setting on the generic property of this bin
+		 * playersinkbin->current_position = currentpts/90000L;
+		*/
+		g_value_set_double(value,playersinkbin->current_position);
+		break;
+	case PROP_RESOLUTION:
+		/* Get appropriate value from soc gstreamer element
+		 * Example: g_object_get(playersinkbin->video_sink,"resolution",&resolution,NULL);
+		 * Format,if necessary,before setting on the generic property of the bin
+		 * playersinkbin->resolution = resolution;
+		*/
+		g_value_set_enum(value,playersinkbin->resolution);
+		break;
+	case PROP_AUDIO_MUTE:
+		/* Get current value of audio mute from soc gstreamer element
+		 * Example: g_object_get(playersinkbin->audio_sink,"mute",&(playersinkbin->audio_mute),NULL);
+		*/
+		g_value_set_boolean( value,playersinkbin->audio_mute);
+		break;
+	case PROP_VOLUME:
+		/* Get current value of volume from soc gstreamer element
+		 * Example: g_object_get(playersinkbin->audio_sink,"volume",&(playersinkbin->volume),NULL);
+		*/
+		g_value_set_double( value,playersinkbin->volume);
+		break;
+	default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+		break;
+	}
+	/* END SOC CHANGES */
+}
+
+static void
+gst_player_sinkbin_set_property (GObject * object, guint prop_id,
+#ifdef USE_GST1
+                                 const GValue * value, GParamSpec * pspec)
+#else
+                                 GValue * value, GParamSpec * pspec)
+#endif
+{
+
+	GstPlayerSinkBin *playersinkbin = GST_PLAYER_SINKBIN (object);
+
+	/* SOC CHANGES: Set appropriate properties on soc gstreamer elements*/
+	switch (prop_id) {
+	case PROP_PROGRAM_NUM:
+		playersinkbin->prog_no = g_value_get_uint(value);
+		/*
+		* Set the program number on soc demux gstreamer element
+		 * Example: g_object_set(playersinkbin->demux, "program-number", playersinkbin->prog_no, NULL);
+		 */
+		break;
+	case PROP_PREFERRED_LANGUAGE:
+		memset(playersinkbin->preffered_language, '\0', sizeof(playersinkbin->preffered_language));
+		/* Use this setting to select the preferred audio language while dynamically linking source
+		* pads from demux,no SOC specific change required here */
+		strncpy(playersinkbin->preffered_language, g_value_get_string (value),sizeof(playersinkbin->preffered_language));
+		playersinkbin->preffered_language[sizeof(playersinkbin->preffered_language)-1] = 0;	
+		break;
+	case PROP_SHOW_LAST_FRAME:
+		playersinkbin->show_last_frame = g_value_get_boolean(value);
+		/* This property keeps the last frame on screen while stop rather than a black frame.
+		* Set the appropriate property on soc gstreamer element.
+		 * Example: g_object_set(playersinkbin->video_sink, "stop-keep-frame", playersinkbin->show_last_frame, NULL);
+		 */
+		break;
+	case PROP_VIDEO_MUTE:
+		playersinkbin->video_mute = g_value_get_boolean(value);
+		/* This property sets the video to mute
+		* Set the appropriate property on soc gstreamer element.
+		 * Example: g_object_set(playersinkbin->video_sink, "mute",playersinkbin->video_mute, NULL);
+		 */
+		break;
+	case PROP_VIDEO_RECTANGLE:
+		memset(playersinkbin->video_rectangle, '\0', sizeof(playersinkbin->video_rectangle));
+		strncpy(playersinkbin->video_rectangle, g_value_get_string (value),sizeof(playersinkbin->video_rectangle));
+		playersinkbin->video_rectangle[sizeof(playersinkbin->video_rectangle)-1] = 0;
+		/* Parse,format if necessary and set video rectangle appropriately on soc gstreamer video sink element
+		 * g_object_set(playersinkbin->video_sink,"rectangle",playersinkbin->video_rectangle,NULL);
+		*/
+		break;
+	case PROP_PLANE:
+		playersinkbin->plane = g_value_get_enum(value);
+		/* Map plane value to soc specific value and set on appropriate gstreamer element
+		 * Example: g_object_set(playersinkbin->video_sink,"plane",playersinkbin->plane,NULL);
+		*/
+		break;
+	case PROP_PLAY_SPEED:
+		playersinkbin->play_speed = g_value_get_float(value);
+		/* Set on soc gstreamer element if necessary or send newsegment on the demux pad in case of rewind */
+		break;
+	case PROP_RESOLUTION:
+		playersinkbin->resolution = g_value_get_enum(value);
+		/* Map resolution value to soc specific value and set on appropriate gstreamer element
+		 * Example:g_object_set(playersinkbin->video_sink,"resolution",playersinkbin->resolution,NULL);
+		*/
+		break;
+	case PROP_AUDIO_MUTE:
+		playersinkbin->audio_mute = g_value_get_boolean(value);
+		/* This property sets the audio to mute
+		* Set the appropriate property on soc gstreamer element.
+		 * Example: g_object_set(playersinkbin->audio_sink, "mute",playersinkbin->audio_mute, NULL);
+		 */
+		break;
+	case PROP_VOLUME:
+		playersinkbin->volume = g_value_get_double(value);
+		/* This property sets the audio volume level to requested volume
+		* Set the appropriate property on soc gstreamer element.
+		 * Example: g_object_set(playersinkbin->audio_sink, "volume",playersinkbin->volume, NULL);
+		 */
+		break;
+	default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+		break;
+	}
+	/* END SOC CHANGES */
+}
+
+static gboolean
+gst_player_sinkbin_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
+{
+	gboolean ret = 0;
+
+	switch (GST_EVENT_TYPE (event)) {
+	default:
+		break;
+	}
+	return ret;
+}
+
+GType
+gst_player_sinkbin_get_type (void)
+{
+	static GType gst_player_sinkbin_type = 0;
+
+	if (!gst_player_sinkbin_type) {
+		static const GTypeInfo gst_player_sinkbin_info = {
+			sizeof (GstPlayerSinkBinClass),
+			NULL,
+			NULL,
+			(GClassInitFunc) gst_player_sinkbin_class_init,
+			NULL,
+			NULL,
+			sizeof (GstPlayerSinkBin),
+			0,
+			(GInstanceInitFunc) gst_player_sinkbin_init,
+			NULL
+		};
+
+		gst_player_sinkbin_type =
+		    g_type_register_static (GST_TYPE_BIN, "GstPlayerSinkBin",
+		                            &gst_player_sinkbin_info, 0);
+	}
+
+	return gst_player_sinkbin_type;
+}
+
+/* entry point to initialize the plug-in
+ */
+static gboolean
+playersinkbin_init (GstPlugin * plugin)
+{
+	/* debug category for fltering log messages
+	 *
+	 */
+	GST_DEBUG_CATEGORY_INIT (gst_player_sinkbin_debug, "playersinkbin",
+	                         0, "playersinkbin");
+
+	return gst_element_register (plugin, "playersinkbin", GST_RANK_NONE,
+	                             GST_TYPE_PLAYER_SINKBIN);
+}
+
+
+/* PACKAGE: this is usually set by autotools depending on some _INIT macro
+ * in configure.ac and then written into and defined in config.h, but we can
+ * just set it ourselves here in case someone doesn't use autotools to
+ * compile this code. GST_PLUGIN_DEFINE needs PACKAGE to be defined.
+ */
+#ifndef PACKAGE
+#define PACKAGE "playersinkbin"
+#endif
+
+/* gstreamer looks for this structure to register plugins
+ *
+ */
+GST_PLUGIN_DEFINE (
+    GST_VERSION_MAJOR,
+    GST_VERSION_MINOR,
+#ifdef USE_GST1
+    playersinkbin,
+#else
+    "playersinkbin",
+#endif
+    "Demux and Decode Transport stream",
+    playersinkbin_init,
+    VERSION,
+    "LGPL",
+    "GStreamer",
+    "http://gstreamer.net/"
+)
