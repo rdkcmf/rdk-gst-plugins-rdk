@@ -1767,17 +1767,16 @@ static curl_socket_t gst_http_src_opensocket_callback(void *clientp, curlsocktyp
    GST_DEBUG_OBJECT(src, "gst_http_src_opensocket_callback: purpose %d family %d socktype %d protocol %d, LowWaterMark %d",
                     purpose, address->family, address->socktype, address->protocol, lowWaterMark);
    socket_fd= socket(address->family, address->socktype, address->protocol);
-   GST_DEBUG_OBJECT(src, "gst_http_src_opensocket_callback: create socket_fd %d", socket_fd);
-   if ( socket_fd )
-   {
-      GST_DEBUG_OBJECT(src, "gst_http_src_opensocket_callback: calling setsockopt SO_RCVLOWAT for socket_fd %d LowWaterMark %d", socket_fd, lowWaterMark);
-      rc= setsockopt( socket_fd, SOL_SOCKET, SO_RCVLOWAT, &lowWaterMark, sizeof(int) );
-      if ( rc != 0 )
-      {
-         GST_ERROR_OBJECT( src, "setsockopt error %d setting SO_RCVLOWAT for socket_fd %d", rc, socket_fd );
-      }
+   if (socket_fd < 0) {    //CID : 18631 - Check for poitive value of socket_fd
+        GST_ERROR_OBJECT( src, "socket error %d creating socket for socket_fd ", socket_fd );
+   } else {
+        GST_DEBUG_OBJECT(src, "gst_http_src_opensocket_callback: create socket_fd %d", socket_fd);
+        GST_DEBUG_OBJECT(src, "gst_http_src_opensocket_callback: calling setsockopt SO_RCVLOWAT for socket_fd %d LowWaterMark %d", socket_fd, lowWaterMark);
+        rc= setsockopt( socket_fd, SOL_SOCKET, SO_RCVLOWAT, &lowWaterMark, sizeof(int) );
+        if (rc < 0) {
+           GST_ERROR_OBJECT( src, "setsockopt error %d setting SO_RCVLOWAT for socket_fd %d", rc, socket_fd );
+        }
    }
-
    src->m_socketFD = socket_fd;
    return socket_fd;
 }
