@@ -150,6 +150,17 @@ AC_ARG_ENABLE([rbifilter],
     	      ],
     	      [echo "rbifilter plugin is disabled"])
 
+AC_ARG_ENABLE([dtv],
+              AS_HELP_STRING([--enable-dtv],[enable dtvsource plugin (default is no)]),
+              [
+      		case "${enableval}" in
+        	 yes) PLUGIN_SRC="$PLUGIN_SRC dtvsource";;
+        	 no)  echo "dtvsource plugin is disabled" ;;
+        	 *) AC_MSG_ERROR([bad value ${enableval} for --enable-dtv]) ;;
+       		esac
+    	      ],
+    	      [echo "dtvsource plugin is disabled"])
+
 #RMFMeta can be built only for GST-1.0
 AC_SUBST(PLUGIN_SRC)
 AC_SUBST(SUBDIRS)
@@ -163,5 +174,6 @@ AC_CONFIG_FILES([Makefile
                  src/dtcpencrypt/Makefile
                  src/httpsink/Makefile
                  src/httpsrc/Makefile
-                 src/rbifilter/Makefile])
+                 src/rbifilter/Makefile
+                 src/dtvsource/Makefile])
 AC_OUTPUT
