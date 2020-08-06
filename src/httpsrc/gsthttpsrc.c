@@ -130,6 +130,9 @@ enum
 #define DEFAULT_STARTPTS 0
 #define DEFAULT_ENDPTS 0
 #define DEFAULT_SO_RCVLOWAT 1
+#define FLOW_TIMER_WAIT_MAX_US 2*1000*1000 //2 seconds
+#define FLOW_TIMER_WAIT_SLEEP_INTERVAL_US 10000 //10 ms
+#define FLOW_TIMER_MAX_WAIT_ITERATIONS (FLOW_TIMER_WAIT_MAX_US/FLOW_TIMER_WAIT_SLEEP_INTERVAL_US) //200 iterations
 
 static void gst_http_src_uri_handler_init(gpointer g_iface, gpointer iface_data);
 
@@ -1674,17 +1677,21 @@ static void* gst_http_src_session_thread( void *arg )
          src->m_sessionPaused= TRUE;
       }
 
-      for ( flowTDelayIdx = 0; !src->m_flowTimerThreadStarted && (flowTDelayIdx < 10); flowTDelayIdx++ )
-      {
-         GST_WARNING_OBJECT(src, "GSTHTTPSRC: Yielding Session Thread as FlowTimer has not started");
-         pthread_yield();
-         usleep(10000);
-         // 10ms sleep looped 10 times looped 10 times.
-         // Maximum delay for flowtimer to start 100ms
-      }
-
-      /* wakeup flow timer thread before join */
       pthread_mutex_lock( &src->m_flowTimerMutex );
+      for ( flowTDelayIdx = 0; !src->m_flowTimerThreadStarted && (flowTDelayIdx < FLOW_TIMER_MAX_WAIT_ITERATIONS); flowTDelayIdx++ )
+      {
+         pthread_mutex_unlock( &src->m_flowTimerMutex ); //Release to allow m_flowTimerThreadStarted to be changed.
+         if(0 == (flowTDelayIdx % (FLOW_TIMER_MAX_WAIT_ITERATIONS/4))) //Log 4 times during the wait.
+            GST_WARNING_OBJECT(src, "GSTHTTPSRC: Yielding Session Thread as FlowTimer has not started");
+         pthread_yield();
+         usleep(FLOW_TIMER_WAIT_SLEEP_INTERVAL_US);
+         // 10ms sleep looped 200 times.
+         // Maximum delay for flowtimer to start 2 seconds
+         pthread_mutex_lock( &src->m_flowTimerMutex );
+      }
+      if(FLOW_TIMER_MAX_WAIT_ITERATIONS == flowTDelayIdx)
+         GST_WARNING_OBJECT(src, "%s: expect flow timer to block indefinitely.", __func__);
+      /* wakeup flow timer thread before join */
       pthread_cond_signal( &src->m_flowTimerCond );
       pthread_mutex_unlock( &src->m_flowTimerMutex );
 
@@ -1717,17 +1724,16 @@ static void* gst_http_src_flow_timer_thread( void *arg )
    GstHttpSrc *src;
 
    src= (GstHttpSrc*)arg;
-
+   
+   pthread_mutex_lock( &src->m_flowTimerMutex );
+   src->m_flowTimerThreadStarted= TRUE;
    if( !src->m_threadStopRequested )
    {
-      /* wait for first chunk received */
-      pthread_mutex_lock( &src->m_flowTimerMutex );
-      src->m_flowTimerThreadStarted= TRUE;
+      /* wait for first chunk received */      
       pthread_cond_wait( &src->m_flowTimerCond, &src->m_flowTimerMutex );
-      pthread_mutex_unlock( &src->m_flowTimerMutex );
    }
-
-   src->m_flowTimerThreadStarted= TRUE;
+   pthread_mutex_unlock( &src->m_flowTimerMutex );
+   
    
    while( !src->m_threadStopRequested )
    {
