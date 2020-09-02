@@ -1563,10 +1563,6 @@ gst_dtcp_enc_chain (GstPad * pad, GstBuffer * buf)
 #ifndef USE_GST1
   gst_buffer_list_iterator_free(it);
 #endif
-  if(ret < GST_FLOW_OK)
-  {
-      gst_buffer_list_unref(bufferlist_to_send);
-  }
 
 out:
 #ifdef USE_GST1
