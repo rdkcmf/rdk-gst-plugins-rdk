@@ -418,7 +418,7 @@ gst_dtcp_enc_class_init (GstDtcpEncClass * klass)
           
   g_object_class_install_property (gobject_class, PROP_RESET,
       g_param_spec_boolean ("reset", "Reset", "Reset the dtcp session to clean up residue data default:FALSE",
-          FALSE, (GParamFlags)G_PARAM_READWRITE));
+          FALSE, (GParamFlags)G_PARAM_WRITABLE));
 
 #ifdef USE_GST1
   gst_element_class_add_pad_template (gstelement_class,
@@ -546,7 +546,7 @@ gst_dtcp_enc_set_property (GObject * object, guint prop_id,
 	  g_print("%s:: RemoteIp = '%s'\n", __FUNCTION__, filter->remoteip);
       break;
     case PROP_KEY_LABEL:
-      filter->exchange_key_label = g_value_get_uchar (value);
+      filter->exchange_key_label = g_value_get_uint (value);
 	  g_print("%s:: exchange_key_label = %x\n", __FUNCTION__, filter->exchange_key_label);
       break;
     case PROP_RESET:
@@ -591,6 +591,9 @@ gst_dtcp_enc_get_property (GObject * object, guint prop_id,
       break;
     case PROP_REMOTE_IP:
       g_value_set_string(value, filter->remoteip);
+      break;
+    case PROP_KEY_LABEL:
+      g_value_set_uint(value, filter->exchange_key_label);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
