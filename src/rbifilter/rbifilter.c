@@ -689,7 +689,11 @@ gst_rbifilter_loop( GstPad * pad )
       #ifdef USE_GST1
       GstMapInfo map;
       int size;
-
+      
+      /*Ensure buffer writable before passing it*/      
+      if (FALSE == gst_buffer_is_writable (buffer))  {
+          buffer = gst_buffer_make_writable (buffer);
+      }
       gst_buffer_map (buffer, &map, (GstMapFlags)GST_MAP_READWRITE);
       
       size= map.size;
