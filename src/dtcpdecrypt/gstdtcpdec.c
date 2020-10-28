@@ -47,12 +47,14 @@
 #include <gst/gst.h>
 #include <stdlib.h>
 #include <string.h>
+#include "safec_lib.h"
 
 #include "gstdtcpdec.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_dtcp_dec_debug);
 #define GST_CAT_DEFAULT gst_dtcp_dec_debug
 #define GST_DTCPDEC_ERR_EVENT 0x0800
+#define MAX_ERR_STR_LENGTH  64
 
 //#define DATA_BUF_SIZE 5*1024
 
@@ -115,6 +117,17 @@ static void gst_dtcp_dec_set_property (GObject * object, guint prop_id,
 static void gst_dtcp_dec_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 
+static void dtcp_error(char *err, char *str)
+{
+    errno_t rc = -1;
+
+    rc = strcpy_s(err, MAX_ERR_STR_LENGTH, str);
+    if (rc != EOK)
+    {
+        ERR_CHK(rc);
+    }
+}
+
 #ifdef USE_GST1
 static GstFlowReturn gst_dtcp_dec_chain (GstPad * pad, GstObject* parent,
     GstBuffer * buf);
@@ -171,45 +184,45 @@ static int getErrCode(dtcp_result_t result)
 
 static void getErrStr(dtcp_result_t result, char *err_str)
 {
+	errno_t rc = -1;
 	switch (result)
 	{
 		case DTCP_ERR_NOT_INITIALIZED:     /**< DTCP Manager not initialized yet.    */
-			strcpy(err_str, "DTCP_ERR_NOT_INITIALIZED");
+			dtcp_error(err_str, "DTCP_ERR_NOT_INITIALIZED");
 			break;
     	case DTCP_ERR_INVALID_PARAM:       /**< Invalid parameter supplied.          */
-			strcpy(err_str, "DTCP_ERR_INVALID_PARAM");
+			dtcp_error(err_str, "DTCP_ERR_INVALID_PARAM");
 			break;
     	case DTCP_ERR_GENERAL:             /**< General unspecified error.           */
-			strcpy(err_str, "DTCP_ERR_GENERAL");
+			dtcp_error(err_str, "DTCP_ERR_GENERAL");
 			break;
     	case DTCP_ERR_MEMORY_ALLOC:        /**< Memory allocation failure.           */
-			strcpy(err_str, "DTCP_ERR_MEMORY_ALLOC");
+			dtcp_error(err_str, "DTCP_ERR_MEMORY_ALLOC");
 			break;
     	case DTCP_ERR_OUT_OF_SESSIONS:     /**< Too many active sessions.            */
-			strcpy(err_str, "DTCP_ERR_OUT_OF_SESSIONS");
+			dtcp_error(err_str, "DTCP_ERR_OUT_OF_SESSIONS");
 			break;
     	case DTCP_ERR_INVALID_CERTIFICATE: /**< Invalid certificate.                 */
-			strcpy(err_str, "DTCP_ERR_INVALID_CERTIFICATE");
+			dtcp_error(err_str, "DTCP_ERR_INVALID_CERTIFICATE");
 			break;
     	case DTCP_ERR_AKE:                 /**< Authorization/Key Exchange error.    */
-			strcpy(err_str, "DTCP_ERR_AKE");
+			dtcp_error(err_str, "DTCP_ERR_AKE");
 			break;
     	case DTCP_ERR_CONT_KEY_REQ:        /**< Content key error.                   */
-			strcpy(err_str, "DTCP_ERR_CONT_KEY_REQ");
+			dtcp_error(err_str, "DTCP_ERR_CONT_KEY_REQ");
 			break;
     	case DTCP_ERR_INVALID_IP_ADDRESS:  /**< Invalid IP address supplied.         */
-			strcpy(err_str, "DTCP_ERR_INVALID_IP_ADDRESS");
+			dtcp_error(err_str, "DTCP_ERR_INVALID_IP_ADDRESS");
 			break;
     	case DTCP_ERR_SERVER_NOT_REACHABLE: /**< DTCP Server not reachable.           */
-			strcpy(err_str, "DTCP_ERR_SERVER_NOT_REACHABLE");
+			dtcp_error(err_str, "DTCP_ERR_SERVER_NOT_REACHABLE");
 			break;
     	case DTCP_ERR_DECRYPT: 
-			strcpy(err_str, "DTCP_PCP_HEADER_DECODE_FAILURE");
+			dtcp_error(err_str, "DTCP_PCP_HEADER_DECODE_FAILURE");
 			break;
 		default:
-			strcpy(err_str, "DTCP_ERROR");
+			dtcp_error(err_str, "DTCP_ERROR");
 	}
-	return;
 }
 
 static void onError(GstDtcpDec *filter, int err_code, char* err_string)
@@ -289,7 +302,7 @@ gst_dtcp_dec_change_state (GstElement * element, GstStateChange transition)
 			{
 				filter->pDtcpSession = 0;
 				filter->dtcp_element_bypass = TRUE;
-				char err_str[64];
+				char err_str[MAX_ERR_STR_LENGTH];
 				getErrStr(retVal, err_str);
 				onError(filter, getErrCode(retVal), err_str);
 				ret = GST_STATE_CHANGE_FAILURE;
@@ -454,7 +467,7 @@ gst_dtcp_dec_init (GstDtcpDec * filter,
   dtcp_result_t retVal = DTCPMgrInitialize();
   if(DTCP_SUCCESS != retVal)
   {
-	char err_str[64];
+	char err_str[MAX_ERR_STR_LENGTH];
 	getErrStr(retVal, err_str);
     onError(filter, getErrCode(retVal), err_str);
   }
@@ -489,7 +502,13 @@ gst_dtcp_dec_init (GstDtcpDec * filter,
   gst_element_add_pad (GST_ELEMENT (filter), filter->srcpad);
   filter->silent = TRUE;
   filter->ake_result = FALSE;
-  strcpy(filter->dtcp_src_ip, "127.0.0.1");
+  errno_t rc = -1;
+  rc = strcpy_s(filter->dtcp_src_ip, sizeof(filter->dtcp_src_ip), "127.0.0.1");
+  if(rc != EOK)
+  {
+      ERR_CHK(rc);
+      return;
+  }
   filter->dtcp_port = 5000;
   filter->buffersize = 4096; //Default buffer size of HNSrc
 //  filter->ake_init_ready = FALSE;
@@ -508,6 +527,7 @@ gst_dtcp_dec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
   GstDtcpDec *filter = GST_DTCPDEC (object);
+  errno_t rc = -1;
 
   switch (prop_id) {
     case PROP_SILENT:
@@ -516,9 +536,13 @@ gst_dtcp_dec_set_property (GObject * object, guint prop_id,
     case PROP_AKE_RESULT:
       break;
     case PROP_DTCP_SRC_IP:
-      memset (filter->dtcp_src_ip, '\0', sizeof(filter->dtcp_src_ip));
-      strncpy(filter->dtcp_src_ip, g_value_get_string (value), 49);
-	  filter->dtcp_src_ip[49] = '\0';
+      rc = strncpy_s(filter->dtcp_src_ip, sizeof(filter->dtcp_src_ip), g_value_get_string (value), 49);
+      if(rc != EOK)
+      {
+         ERR_CHK(rc);
+         return;
+      }
+
 /*
       if(filter->ake_init_ready)
       {
@@ -699,7 +723,7 @@ gst_dtcp_dec_chain (GstPad * pad, GstBuffer * buf)
   if(DTCP_SUCCESS != retVal)
   {
     GST_ERROR_OBJECT(filter, "%s::Error while decrypting... \n", __FUNCTION__);
-	char err_str[64];
+	char err_str[MAX_ERR_STR_LENGTH];
 	getErrStr(DTCP_ERR_DECRYPT, err_str);
     onError(filter, getErrCode(DTCP_ERR_DECRYPT), err_str);
     /* DTCPMgrReleasePacket() shouldn't be called if DTCPMgrProcessPacket()

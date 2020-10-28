@@ -32,6 +32,7 @@
 #endif
 
 #include "gsthttpsink.h"
+#include "safec_lib.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -42,7 +43,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-#define MAX_REQUEST_SIZE        16384
+#define DATA_BUFFER_SIZE       32
 
 #define GST_PACKAGE_ORIGIN "http://gstreamer.net/"
 
@@ -314,6 +315,8 @@ gst_http_sink_set_property (GObject * object, guint prop_id,
 {
   GstHttpSink *sink = GST_HTTP_SINK (object);
 
+  errno_t rc = -1;
+
   switch (prop_id) {
     case PROP_SILENT:
       sink->silent = g_value_get_boolean (value);
@@ -328,11 +331,19 @@ gst_http_sink_set_property (GObject * object, guint prop_id,
       sink->is_chunked = g_value_get_boolean (value);
       break;
     case PROP_SOURCE_TYPE:
-      strcpy( sink->source_type, g_value_get_string (value) );
+      rc = strcpy_s( sink->source_type, sizeof(sink->source_type), g_value_get_string (value) );
+      {
+         ERR_CHK(rc);
+         return;
+      }
       GST_INFO_OBJECT(sink, "Source Type: %s", sink->source_type);
       break;
     case PROP_SOURCE_ID:
-      strcpy( sink->source_id, g_value_get_string (value) );
+      rc = strcpy_s( sink->source_id, sizeof(sink->source_id), g_value_get_string (value) );
+      {
+         ERR_CHK(rc);
+         return;
+      }
       GST_INFO_OBJECT(sink, "Source Id: %s", sink->source_id);
       break;
 
@@ -462,6 +473,7 @@ gst_http_sink_render (GstBaseSink * sink, GstBuffer * buf)
 {
   GstHttpSink *httpsink;
   int fd;
+  errno_t rc = -1;
 #ifdef USE_GST1
   GstMapInfo map;
 #endif
@@ -548,7 +560,7 @@ gst_http_sink_render (GstBaseSink * sink, GstBuffer * buf)
   else
   {
 		//GST_DEBUG("Stream Type : Chunked");
-		char data[MAX_REQUEST_SIZE];
+		char data[DATA_BUFFER_SIZE];
 		int  len;
 
 		if (fd != -1 && (httpsink->sendError != TRUE))
@@ -563,9 +575,21 @@ gst_http_sink_render (GstBaseSink * sink, GstBuffer * buf)
 			}
 #endif
 #ifdef USE_GST1
-			len = sprintf(data, "%X\r\n", map.size);
+			rc = sprintf_s(data, DATA_BUFFER_SIZE, "%X\r\n", map.size);
+			if(rc < EOK)
+			{
+				ERR_CHK(rc);
+				goto error;
+			}
+			len = rc;
 #else
-			len = sprintf(data, "%X\r\n", buf->size);
+			rc = sprintf_s(data, DATA_BUFFER_SIZE, "%X\r\n", buf->size);
+			if(rc < EOK)
+			{
+				ERR_CHK(rc);
+				goto error;
+			}
+			len = rc;
 #endif
 			struct timeval time;
 			gettimeofday( &time, NULL );
@@ -596,7 +620,13 @@ gst_http_sink_render (GstBaseSink * sink, GstBuffer * buf)
 			httpsink->sent_data_size += sockRet;
 			// GST_DEBUG("2. chunked : sockRet = %d:%s: send returned = %d", errno, strerror(errno), sockRet );	
 
-			len = sprintf(data, "\r\n");
+			rc = sprintf_s(data, DATA_BUFFER_SIZE, "\r\n");
+			if(rc < EOK)
+			{
+				ERR_CHK(rc);
+				goto error;
+			}
+			len = rc;
 			sockRet = send(fd, data, len, 0);
 			if(sockRet == -1)
 			{

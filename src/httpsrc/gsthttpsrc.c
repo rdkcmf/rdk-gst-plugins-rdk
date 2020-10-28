@@ -41,6 +41,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <time.h>
+#include "safec_lib.h"
 
 #define ELEMENT_NAME "httpsrc"
 
@@ -537,7 +538,9 @@ static void gst_http_src_reset(GstHttpSrc *src)
    src->m_readDelay= 0;
    src->m_socketFD = -1;
    src->m_isLowBitRateContent = FALSE;
-   memset(src->m_curlErrBuf, '\0', CURL_ERROR_SIZE);
+   errno_t rc = -1;
+   rc = memset_s(src->m_curlErrBuf, CURL_ERROR_SIZE, '\0', CURL_ERROR_SIZE);
+   ERR_CHK(rc);
    
    if ( src->m_curl )
    {
@@ -1011,6 +1014,7 @@ static gboolean gst_http_src_set_proxy(GstHttpSrc *src, const gchar *uri)
 
 static gboolean gst_http_src_set_trailer( GstHttpSrc *src, const gchar *trailer, gint len )
 {
+   errno_t rc = -1;
    GST_DEBUG_OBJECT(src, "gst_http_src_set_trailer: (%.*s)", len, trailer );
    if ( !src->m_trailer )
    {
@@ -1038,7 +1042,8 @@ static gboolean gst_http_src_set_trailer( GstHttpSrc *src, const gchar *trailer,
          return FALSE;
       }
       
-      memset( cat, '\0', catlen );
+      rc = memset_s( cat, catlen, '\0', catlen );
+      ERR_CHK(rc);
       
       for( si= 0; si < currTrailerLen; ++di, ++si )
       {
@@ -1478,6 +1483,7 @@ static GstFlowReturn gst_http_src_create(GstPushSrc *pushsrc, GstBuffer **outbuf
 static void* gst_http_src_session_thread( void *arg )
 {
    GstHttpSrc *src = (GstHttpSrc*)arg;
+   errno_t rc = -1;
 
    src->m_threadRunning= TRUE;
    
@@ -1586,11 +1592,19 @@ static void* gst_http_src_session_thread( void *arg )
                GST_ERROR_OBJECT(src, "CURLE_HTTP_RETURNED_ERROR Curl Err Buf  - %s", src->m_curlErrBuf);
 
                src->m_sessionError= TRUE;
-               sprintf(httpErrStr, "Curl: Http Err Code - %ld : Curl Err Buf - %s ", status, src->m_curlErrBuf);
+               rc = sprintf_s(httpErrStr, sizeof(httpErrStr), "Curl: Http Err Code - %ld : Curl Err Buf - %s ", status, src->m_curlErrBuf);
+               if(rc < EOK)
+               {
+                  ERR_CHK(rc);
+               }				   
 
                if (status == 404) 
                {
-                  strcat(httpErrStr, ": CA_ERROR File Not Found");
+                  rc = strcat_s(httpErrStr,sizeof(httpErrStr), ": CA_ERROR File Not Found");
+                  if(rc != EOK)
+                  {
+                     ERR_CHK(rc);
+                  }
                   GST_ERROR_OBJECT(src, "CURLE_HTTP_RETURNED_ERROR - %s", httpErrStr);
                   GST_ELEMENT_ERROR(src, RESOURCE, NOT_FOUND, (httpErrStr), (src->m_curlErrBuf));
                }
@@ -2076,6 +2090,7 @@ static size_t gst_http_src_data_received(void *ptr, size_t size, size_t nmemb, v
    int blockSize, blockOffset, blockAvail;
    int consumed, copySize;
    long long timeSinceLastPacket;
+   errno_t rc = -1;
       
    src= (GstHttpSrc*)userData;
    basesrc= GST_BASE_SRC_CAST(src);
@@ -2133,7 +2148,12 @@ static size_t gst_http_src_data_received(void *ptr, size_t size, size_t nmemb, v
             {
                copySize= blockAvail;
             }
-            memcpy( &block[blockOffset], &((guchar*)ptr)[recvOffset], copySize );
+            rc = memcpy_s( &block[blockOffset], blockAvail, &((guchar*)ptr)[recvOffset], copySize );
+            if(rc != EOK)
+            {
+               ERR_CHK(rc);
+               goto exit;
+            }
 
             recvOffset += copySize;
             consumed += copySize;
@@ -2341,7 +2361,8 @@ static gboolean gst_http_src_append_extra_headers(GQuark field_id, const GValue 
    enum valueTypes { valueList= 0, valueArray= 1, valueOther= 2 };
    const GValue* (*get_value)(const GValue *val, guint n)= 0;
    const gchar *field_name= g_quark_to_string (field_id);
-   gchar *field_content;   
+   gchar *field_content;
+   errno_t safec_rc = -1;
 
    src= (GstHttpSrc*)userData;
    
@@ -2396,7 +2417,13 @@ static gboolean gst_http_src_append_extra_headers(GQuark field_id, const GValue 
 
       GST_DEBUG_OBJECT(src, "adding extra header: \"%s: %s\"", field_name, field_content);
       
-      sprintf( src->m_work, "%s: %s", field_name, field_content );
+      safec_rc = sprintf_s( src->m_work, sizeof(src->m_work), "%s: %s", field_name, field_content );
+      if(safec_rc < EOK)
+      {
+          ERR_CHK(safec_rc);
+          g_free(field_content);
+          return FALSE;
+      }
       src->m_slist= curl_slist_append(src->m_slist, src->m_work );
       
       g_free(field_content);
