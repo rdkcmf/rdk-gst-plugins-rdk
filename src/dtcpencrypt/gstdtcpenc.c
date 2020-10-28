@@ -52,6 +52,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "gstdtcpenc.h"
+#include "safec_lib.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_dtcp_enc_debug);
 #define GST_CAT_DEFAULT gst_dtcp_enc_debug
@@ -117,25 +118,48 @@ static void putPmtByte( GstDtcpEnc * filter, unsigned char* pmt, int* index, uns
 static void dumpPacket( GstDtcpEnc * filter, unsigned char *packet )
 {
    int i;
-   char buff[1024];   
-   
+   char buff[1024];
+   errno_t rc = -1;
    int col= 0;
    int buffPos= 0;
    int ts_packet_size = filter->tspacketsize;
 
-   buffPos += sprintf(&buff[buffPos], "\n" );
+   rc = sprintf_s(&buff[buffPos],sizeof(buff)-buffPos, "\n" );
+   if(rc < EOK)
+   {
+       ERR_CHK(rc);
+       return;
+   }
+   buffPos += rc;
    for( i= 0; i < ts_packet_size; ++i )
    {
-       buffPos += sprintf(&buff[buffPos], "%02X ", packet[i] );
+        rc = sprintf_s(&buff[buffPos], sizeof(buff)-buffPos, "%02X ", packet[i] );
+        if(rc < EOK)
+        {
+            ERR_CHK(rc);
+            return;
+        }
+        buffPos += rc;
        ++col;
        if ( col == 8 )
        {
-          strcat( buff, " " );
+            rc = strcat_s(buff,sizeof(buff), " ");
+            if(rc != EOK)
+            {
+                ERR_CHK(rc);
+                return;
+            }
           buffPos += 1;
        }
        if ( col == 16 )
        {
-          buffPos += sprintf(&buff[buffPos], "\n" );
+          rc = sprintf_s(&buff[buffPos], sizeof(buff)-buffPos, "\n" );
+          if(rc < EOK)
+          {
+              ERR_CHK(rc);
+              return;
+          }
+          buffPos += rc;
           col= 0;
        }
    }
@@ -478,7 +502,13 @@ gst_dtcp_enc_init (GstDtcpEnc * filter,
   filter->cci = 0;
   filter->srctype = 0; //QAMSRC
   filter->buffersize = 0; //131036; //Default buffer size of QAMSRC
-  strcpy(filter->remoteip, "0.0.0.0");
+  errno_t rc = -1;
+  rc = strcpy_s(filter->remoteip, sizeof(filter->remoteip), "0.0.0.0");
+  if(rc != EOK)
+  {
+      ERR_CHK(rc);
+      return;
+  }
   filter->havePAT= FALSE;
   filter->havePMT= FALSE;
   filter->haveNewPMT= FALSE;
@@ -513,6 +543,7 @@ gst_dtcp_enc_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
   GstDtcpEnc *filter = GST_DTCPENC (object);
+  errno_t rc = -1;
 
   switch (prop_id) {
     case PROP_SILENT:
@@ -540,8 +571,12 @@ gst_dtcp_enc_set_property (GObject * object, guint prop_id,
 	  g_print("%s:: buffersize = %d\n", __FUNCTION__, filter->buffersize);
       break;
     case PROP_REMOTE_IP:
-      memset (filter->remoteip, '\0', sizeof(filter->remoteip));
-      strncpy(filter->remoteip, g_value_get_string (value), 50);
+          rc = strcpy_s(filter->remoteip, sizeof(filter->remoteip), g_value_get_string (value));
+          if(rc != EOK)
+          {
+             ERR_CHK(rc);
+             return;
+          }
 	  filter->remoteip[49] = '\0';
 	  g_print("%s:: RemoteIp = '%s'\n", __FUNCTION__, filter->remoteip);
       break;
@@ -631,6 +666,7 @@ static gboolean gst_dtcp_enc_generate_pmt( GstDtcpEnc *filter,
    int crc, crcLenTotal, crcLen;
    unsigned char byte;
    unsigned char *pmtPacket;
+   errno_t rc = -1;
    
    pmtPid= filter->pmtPid;
    unsigned char cci = filter->cci;
@@ -796,7 +832,8 @@ static gboolean gst_dtcp_enc_generate_pmt( GstDtcpEnc *filter,
    putPmtByte( filter, pmtPacket, &pi, (crc & 0xFF), pmtPid );
    
    // Fill stuffing bytes for rest of TS packet
-   memset( pmtPacket+pi, 0xFF, MAX_PACKET_SIZE-pi );
+   rc = memset_s( pmtPacket+pi, MAX_PACKET_SIZE-pi, 0xFF, MAX_PACKET_SIZE-pi );
+   ERR_CHK(rc);
 
    filter->newPMTSize= pmtSize;
 
@@ -814,9 +851,9 @@ static gboolean gst_dtcp_enc_examine_buffer( GstDtcpEnc *filter, GstBuffer *buf 
    int packetCount= 0;
    int ttsSize = 0;
    int ts_packet_size = filter->tspacketsize;
+   errno_t rc = -1;
 #ifdef USE_GST1
-   GstMapInfo map;
-   memset( &map, 0, sizeof(GstMapInfo));
+   GstMapInfo map =  {0};
 #endif
 
    if(filter->tspacketsize == TTS_PACKET_SIZE)
@@ -1022,7 +1059,12 @@ static gboolean gst_dtcp_enc_examine_buffer( GstDtcpEnc *filter, GstBuffer *buf 
                                              {
                                                 // ISO_639_language_descriptor
                                                 case 0x0A:
-                                                   memcpy( work, &programInfo[descIdx+2], descrLen );
+                                                   rc = memcpy_s( work, sizeof(work), &programInfo[descIdx+2], descrLen );
+                                                   if(rc != EOK)
+                                                   {
+                                                       ERR_CHK(rc);
+                                                       return FALSE;
+                                                   }
                                                    work[descrLen]= '\0';
                                                    audioLanguages[audioComponentCount]= strdup(work);
                                                    break;
@@ -1129,7 +1171,12 @@ static gboolean gst_dtcp_enc_examine_buffer( GstDtcpEnc *filter, GstBuffer *buf 
                   filter->newPMT[3]= packet[3];
 			   }
                filter->newPMT[3+ttsSize]= packet[3+ttsSize];
-               memcpy( packet, filter->newPMT, ts_packet_size );
+               rc = memcpy_s( packet, ts_packet_size, filter->newPMT, ts_packet_size );
+               if(rc != EOK)
+               {
+                   ERR_CHK(rc);
+                   return FALSE;
+               }
                dumpPackets( filter, packet, ts_packet_size );
             }
          }
@@ -1211,6 +1258,7 @@ gst_dtcp_enc_chain (GstPad * pad, GstBuffer * buf)
   int dataLen;
   DTCPIP_Packet *packet = NULL;
   GstFlowReturn  ret = GST_FLOW_OK;
+  errno_t rc = -1;
 
   if(NULL == pad) /*Coverity fix for issue 16638*/
   {
@@ -1404,7 +1452,15 @@ gst_dtcp_enc_chain (GstPad * pad, GstBuffer * buf)
       goto out;
     }
 
-    memcpy(pcpHeaderBuf, packet->pcpHeader, sizeof(uint8_t) * packet->pcpHeaderLength);
+    rc = memcpy_s(pcpHeaderBuf, sizeof(uint8_t) * packet->pcpHeaderLength, packet->pcpHeader, sizeof(uint8_t) * packet->pcpHeaderLength);
+    if(rc != EOK)
+    {
+       ERR_CHK(rc);
+       g_free(pcpHeaderBuf);
+       gst_buffer_list_unref(bufferlist_to_send);
+       ret = GST_FLOW_ERROR;
+       goto out;
+    }
 
     // pcpHeaderBuf g_malloc'd above will be free using g_free when dtcpHeaderBuf is unreffed
     dtcpHeaderBuf = gst_buffer_new_wrapped (pcpHeaderBuf, packet->pcpHeaderLength);
@@ -1427,7 +1483,16 @@ gst_dtcp_enc_chain (GstPad * pad, GstBuffer * buf)
       goto out;
 	}
 
-    memcpy(GST_BUFFER_DATA(dtcpHeaderBuf), packet->pcpHeader, packet->pcpHeaderLength);
+      rc =  memcpy_s(GST_BUFFER_DATA(dtcpHeaderBuf), GST_BUFFER_SIZE(dtcpHeaderBuf), packet->pcpHeader, packet->pcpHeaderLength);
+      if(rc != EOK)
+      {
+          ERR_CHK(rc);
+          gst_buffer_list_iterator_free(it);
+          gst_buffer_list_unref(bufferlist_to_send);
+          ret = GST_FLOW_ERROR;
+          goto out;
+      }
+	
 #endif
   }
 

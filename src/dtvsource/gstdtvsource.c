@@ -34,7 +34,7 @@
 #include <linux/dvb/dmx.h>
 
 #include "gstdtvsource.h"
-
+#include "safec_lib.h"
 
 #define SPTS_BUFFER_SIZE   (188 * 4096)
 #define PAT_INTERVAL_MS    100
@@ -323,11 +323,16 @@ static gboolean gst_dtv_source_start(GstBaseSrc * bsrc)
    gboolean result;
    gchar dvr_name[64];
    int rc;
+   errno_t safec_rc = -1;
 
    GST_DEBUG_OBJECT(dtvsrc, "gst_dtv_source_start: tuner %u, demux %u", dtvsrc->tuner, dtvsrc->demux);
 
-   snprintf(dvr_name, sizeof(dvr_name), "/dev/dvb/adapter%u/dvr0", dtvsrc->tuner);
-
+    safec_rc = sprintf_s(dvr_name, sizeof(dvr_name), "/dev/dvb/adapter%u/dvr0", dtvsrc->tuner);
+    if(safec_rc < EOK)
+    {
+       ERR_CHK(safec_rc);
+       return FALSE;
+    }
    if ((dtvsrc->dvr_fd = open(dvr_name, O_RDONLY)) >= 0)
    {
       dtvsrc->offset = 0;
@@ -665,6 +670,7 @@ static void* gst_dtv_read_data_thread(void *arg)
    guint bytes_to_read;;
    int nbytes;
    gint64 current_time;
+   errno_t rc = -1;
 #ifdef SPTS_FILENAME
    FILE *fp;
 
@@ -731,7 +737,12 @@ static void* gst_dtv_read_data_thread(void *arg)
              * Just need to update the continuity counter, before using it */
             dtvsrc->current_pat[3] = 0x10 | (dtvsrc->pat_count & 0x0F);
 
-            memcpy(dtvsrc->write_ptr, dtvsrc->current_pat, TSPKT_SIZE);
+            rc = memcpy_s(dtvsrc->write_ptr, TSPKT_SIZE, dtvsrc->current_pat, TSPKT_SIZE);
+            if(rc != EOK)
+            {
+                ERR_CHK(rc);
+                return; 
+            }
 
             dtvsrc->last_pat_timestamp = current_time;
             dtvsrc->pat_count++;

@@ -38,6 +38,7 @@
 #include "gstplayersinkbin.h"
 #include "playersinkbinpmtinfo.h"
 #include <string.h>
+#include "safec_lib.h"
 
 #ifndef VERSION
 #define VERSION "1.0"
@@ -341,15 +342,31 @@ gst_player_sinkbin_init (GstPlayerSinkBin* sinkbin)
 	GstPad *pad;
 	GstPad *gpad;
 	GstPadTemplate *pad_tmpl;
+	errno_t rc = -1;
 
 	/* Initialize properties */
 
 	sinkbin->prog_no = DEFAULT_PROGRAM_NUM;
-	strncpy(sinkbin->available_languages,DEFAULT_AVAILABLE_LANGUAGES,sizeof(DEFAULT_AVAILABLE_LANGUAGES));
-	strncpy(sinkbin->preffered_language,DEFAULT_PREFERRED_LANGUAGE,sizeof(DEFAULT_PREFERRED_LANGUAGE));
+	rc = strcpy_s(sinkbin->available_languages, sizeof(sinkbin->available_languages), DEFAULT_AVAILABLE_LANGUAGES);
+	if(rc != EOK)
+	{
+		ERR_CHK(rc);
+		return;
+	}
+	rc = strcpy_s(sinkbin->preffered_language, sizeof(sinkbin->preffered_language), DEFAULT_PREFERRED_LANGUAGE);
+	if(rc != EOK)
+	{
+		ERR_CHK(rc);
+		return;
+	}
 	sinkbin->show_last_frame = DEFAULT_SHOW_LAST_FRAME;
 	sinkbin->video_decode_handle = DEFAULT_VIDEO_DECODER_HANDLE;
-	strncpy(sinkbin->video_rectangle,DEFAULT_VIDEO_RECTANGLE,sizeof(DEFAULT_VIDEO_RECTANGLE));
+	rc = strcpy_s(sinkbin->video_rectangle, sizeof(sinkbin->video_rectangle), DEFAULT_VIDEO_RECTANGLE);
+	if(rc != EOK)
+	{
+		ERR_CHK(rc);
+		return;
+	}
 	sinkbin->plane = DEFAULT_PLANE;
 	sinkbin->video_mute = DEFAULT_VIDEO_MUTE;
 	sinkbin->play_speed = DEFAULT_PLAY_SPEED;
@@ -591,7 +608,7 @@ gst_player_sinkbin_set_property (GObject * object, guint prop_id,
                                  GValue * value, GParamSpec * pspec)
 #endif
 {
-
+	errno_t rc = -1;
 	GstPlayerSinkBin *playersinkbin = GST_PLAYER_SINKBIN (object);
 
 	/* SOC CHANGES: Set appropriate properties on soc gstreamer elements*/
@@ -604,10 +621,14 @@ gst_player_sinkbin_set_property (GObject * object, guint prop_id,
 		 */
 		break;
 	case PROP_PREFERRED_LANGUAGE:
-		memset(playersinkbin->preffered_language, '\0', sizeof(playersinkbin->preffered_language));
 		/* Use this setting to select the preferred audio language while dynamically linking source
 		* pads from demux,no SOC specific change required here */
-		strncpy(playersinkbin->preffered_language, g_value_get_string (value),sizeof(playersinkbin->preffered_language));
+		rc = strncpy_s(playersinkbin->preffered_language, sizeof(playersinkbin->preffered_language), g_value_get_string (value),sizeof(playersinkbin->preffered_language));
+		if(rc != EOK)
+		{
+			ERR_CHK(rc);
+			return;
+		}
 		playersinkbin->preffered_language[sizeof(playersinkbin->preffered_language)-1] = 0;	
 		break;
 	case PROP_SHOW_LAST_FRAME:
@@ -625,8 +646,12 @@ gst_player_sinkbin_set_property (GObject * object, guint prop_id,
 		 */
 		break;
 	case PROP_VIDEO_RECTANGLE:
-		memset(playersinkbin->video_rectangle, '\0', sizeof(playersinkbin->video_rectangle));
-		strncpy(playersinkbin->video_rectangle, g_value_get_string (value),sizeof(playersinkbin->video_rectangle));
+		rc = strncpy_s(playersinkbin->video_rectangle, sizeof(playersinkbin->video_rectangle), g_value_get_string (value),sizeof(playersinkbin->video_rectangle));
+		if(rc != EOK)
+		{
+			ERR_CHK(rc);
+			return;
+		}
 		playersinkbin->video_rectangle[sizeof(playersinkbin->video_rectangle)-1] = 0;
 		/* Parse,format if necessary and set video rectangle appropriately on soc gstreamer video sink element
 		 * g_object_set(playersinkbin->video_sink,"rectangle",playersinkbin->video_rectangle,NULL);
