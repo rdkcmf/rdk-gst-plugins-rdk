@@ -38,6 +38,7 @@
 
 #define SPTS_BUFFER_SIZE   (188 * 4096)
 #define PAT_INTERVAL_MS    100
+#define SYNC_BYTE          0x47
 
 
 static void gst_dtv_source_dispose(GObject * object);
@@ -661,7 +662,7 @@ static gboolean gst_dtv_source_is_seekable(GstBaseSrc * bsrc)
 }
 
 
-//#define SPTS_FILENAME   "/media/spts.ts"
+//#define SPTS_FILENAME   "/media/spts"
 
 static void* gst_dtv_read_data_thread(void *arg)
 {
@@ -670,17 +671,25 @@ static void* gst_dtv_read_data_thread(void *arg)
    guint bytes_to_read;;
    int nbytes;
    gint64 current_time;
+   gboolean full_packet;
    errno_t rc = -1;
 #ifdef SPTS_FILENAME
+   char filename[32];
    FILE *fp;
-
-   if ((fp = fopen(SPTS_FILENAME, "w")) == NULL)
-   {
-      g_message("%s: Failed to open /media/spts.ts, error %d", __FUNCTION__, errno);
-   }
 #endif
 
    dtvsrc = (GstDtvSource *)arg;
+
+#ifdef SPTS_FILENAME
+   rc = sprintf_s(filename, sizeof(filename), "%s_%u.ts", SPTS_FILENAME, dtvsrc->pmt_pid);
+   if (rc == EOK)
+   {
+      if ((fp = fopen(filename, "w")) == NULL)
+      {
+         g_message("%s: Failed to open %s, error %d", __FUNCTION__, filename, errno);
+      }
+   }
+#endif
 
    dtvsrc->read_ptr = dtvsrc->buffer_start;
    dtvsrc->write_ptr = dtvsrc->buffer_start;
@@ -720,6 +729,22 @@ static void* gst_dtv_read_data_thread(void *arg)
          }
 
          dtvsrc->write_ptr += nbytes;
+
+         /* Check whether the last data read was a complete TS packet by looking for a TS sync byte
+          * as the first byte in the 2 last packets in the buffer. Two packets are checked because
+          * the chance of the sync byte value being in two locations is less than just checking for
+          * one occurrence */
+         if ((nbytes >= TSPKT_SIZE * 2) &&
+            (*(dtvsrc->write_ptr - TSPKT_SIZE) == SYNC_BYTE) &&
+            (*(dtvsrc->write_ptr - 2 * TSPKT_SIZE) == SYNC_BYTE))
+         {
+            full_packet = TRUE;
+         }
+         else
+         {
+            full_packet = FALSE;
+         }
+
          if (dtvsrc->write_ptr == dtvsrc->buffer_end)
          {
             dtvsrc->write_ptr = dtvsrc->buffer_start;
@@ -728,8 +753,9 @@ static void* gst_dtv_read_data_thread(void *arg)
          current_time = dtv_source_get_clock_msecs();
 
          /* Check whether it's time to inject another PAT, but only do it this time if there's
-          * enough space, otherwise it will be done next time */
-         if (((current_time - dtvsrc->last_pat_timestamp) >= PAT_INTERVAL_MS) &&
+          * enough space and the last data received was a full TS packet, otherwise it will be
+          * done next time */
+         if (full_packet && ((current_time - dtvsrc->last_pat_timestamp) >= PAT_INTERVAL_MS) &&
             (dtvsrc->space_in_buffer >= TSPKT_SIZE) &&
             (dtvsrc->buffer_end - dtvsrc->write_ptr >= TSPKT_SIZE))
          {
@@ -747,6 +773,10 @@ static void* gst_dtv_read_data_thread(void *arg)
             dtvsrc->last_pat_timestamp = current_time;
             dtvsrc->pat_count++;
 
+#ifdef SPTS_FILENAME
+            if (fp != NULL)
+               fwrite(dtvsrc->write_ptr, 1, TSPKT_SIZE, fp);
+#endif
             dtvsrc->space_in_buffer -= TSPKT_SIZE;
             dtvsrc->write_ptr += TSPKT_SIZE;
 
@@ -791,7 +821,7 @@ static void dtv_source_create_pat(guchar *pat, guint service_id, guint pmt_pid, 
    guint32 crc;
    guint i;
 
-   pat[0] = 0x47; // Sync Byte
+   pat[0] = SYNC_BYTE;
    pat[1] = 0x40; // TEI=no ; Payload Start=yes; Prio=0; 5 bits PId=0
    pat[2] = 0x00;
    pat[3] = 0x10; // 2 bits Scrambling = no; 2 bits adaptation field = no adaptation; 4 bits continuity counter
