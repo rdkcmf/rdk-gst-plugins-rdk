@@ -677,7 +677,7 @@ gst_dtcp_dec_chain (GstPad * pad, GstBuffer * buf)
 
   if ((0 == dataLen) || (NULL == virtualAddress))
   {
-    GST_WARNING_OBJECT (filter, "The Incoming buffer for Decryption is either NULL or Empty... \n", __FUNCTION__);
+    GST_WARNING_OBJECT (filter, "%s ::The Incoming buffer for Decryption is either NULL or Empty... \n", __FUNCTION__);  //CID:42329 Print_args
     ret = GST_FLOW_OK;
     goto out;
   }

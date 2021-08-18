@@ -63,6 +63,11 @@
 #define ENABLE_READ_DELAY
 #endif
 
+#define CURL_EASY_SETOPT(curl, CURLoption, option)\
+    if (curl_easy_setopt(curl, CURLoption, option) != 0) {\
+          GST_LOG("GSTHTTPSRC : Failed at curl_easy_setopt ");\
+    }  //CID:127573,127648,127985 - checked return
+
 static gboolean httpsrc_init(GstPlugin *plugin)
 {
    gst_element_register(plugin, ELEMENT_NAME, GST_RANK_NONE, gst_http_src_get_type ());
@@ -487,9 +492,6 @@ static void gst_http_src_init(GstHttpSrc *src, GstHttpSrcClass *g_class)
    src->m_isLowBitRateContent = FALSE;
 
    /*coverity[missing_lock]  CID-19225, 19226, 19357, 19358 Code annotation to ignore the Coevrity error*/
-   src->m_queueHead= 0;
-   src->m_queueTail= 0;
-   src->m_queuedByteCount= 0;
    pthread_mutex_init( &src->m_queueMutex, 0 );
    pthread_mutex_init( &src->m_queueNotEmptyMutex, 0 );
    pthread_cond_init( &src->m_queueNotEmptyCond, 0 );
@@ -497,10 +499,18 @@ static void gst_http_src_init(GstHttpSrc *src, GstHttpSrcClass *g_class)
    pthread_cond_init( &src->m_queueNotFullCond, 0 );
    pthread_mutex_init( &src->m_flowTimerMutex, 0 );
    pthread_cond_init( &src->m_flowTimerCond, 0 );
+   pthread_mutex_lock( &src->m_queueMutex );
+   src->m_queueHead= 0;
+   src->m_queueTail= 0;
+   src->m_queuedByteCount= 0;
+   src->m_queuedByteCount= 0;
+   pthread_mutex_unlock( &src->m_queueMutex );
    /*coverity[missing_lock]  CID-19225, 19226, 19357, 19358 Code annotation to ignore the Coevrity error*/
+   pthread_mutex_lock( &src->m_flowTimerMutex );
    src->m_currBlock= 0;
    src->m_currBlockSize= 0;
    src->m_currBlockOffset= 0;
+   pthread_mutex_unlock( &src->m_flowTimerMutex );  //CID:136298,136353,136384,136598 - Missing lock
 
 #ifdef USE_GST1
    gst_base_src_set_automatic_eos (GST_BASE_SRC (src), FALSE);
@@ -701,13 +711,15 @@ static void gst_http_src_set_property(GObject *object,
             src->m_timeout = g_value_get_uint(value);
             if (src->m_curl != NULL) 
             {
-               curl_easy_setopt(src->m_curl, CURLOPT_CONNECTTIMEOUT, src->m_timeout);
-               curl_easy_setopt(src->m_curl, CURLOPT_LOW_SPEED_TIME, src->m_timeout);
+               CURL_EASY_SETOPT(src->m_curl, CURLOPT_CONNECTTIMEOUT, src->m_timeout);
+               CURL_EASY_SETOPT(src->m_curl, CURLOPT_LOW_SPEED_TIME, src->m_timeout);
 
-               if (src->m_timeout == 0)
-                  curl_easy_setopt(src->m_curl, CURLOPT_LOW_SPEED_LIMIT, 0);
-               else
-                  curl_easy_setopt(src->m_curl, CURLOPT_LOW_SPEED_LIMIT, 100);
+               if (src->m_timeout == 0) {
+                  CURL_EASY_SETOPT(src->m_curl, CURLOPT_LOW_SPEED_LIMIT, 0);
+               }
+               else {
+                  CURL_EASY_SETOPT(src->m_curl, CURLOPT_LOW_SPEED_LIMIT, 100);
+               }
 
                GST_WARNING_OBJECT(src, "GSTHTTPSRC: Changing timeout - m_timeout %d", src->m_timeout);
             }
@@ -1496,21 +1508,21 @@ static void* gst_http_src_session_thread( void *arg )
       int flowTDelayIdx = 0;
 
       #ifdef ENABLE_SOCKET_LOWAT
-      curl_easy_setopt(src->m_curl, CURLOPT_OPENSOCKETFUNCTION, gst_http_src_opensocket_callback);
-      curl_easy_setopt(src->m_curl, CURLOPT_OPENSOCKETDATA, src);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_OPENSOCKETFUNCTION, gst_http_src_opensocket_callback);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_OPENSOCKETDATA, src);
       #endif
-      curl_easy_setopt(src->m_curl, CURLOPT_PROGRESSFUNCTION, gst_http_src_progress_callback);
-      curl_easy_setopt(src->m_curl, CURLOPT_PROGRESSDATA, src);
-      curl_easy_setopt(src->m_curl, CURLOPT_NOPROGRESS, 0);
-      curl_easy_setopt(src->m_curl, CURLOPT_HEADERFUNCTION, gst_http_src_header_callback);
-      curl_easy_setopt(src->m_curl, CURLOPT_HEADERDATA, src);
-      curl_easy_setopt(src->m_curl, CURLOPT_URL, src->m_location);
-      curl_easy_setopt(src->m_curl, CURLOPT_WRITEFUNCTION, gst_http_src_data_received );
-      curl_easy_setopt(src->m_curl, CURLOPT_WRITEDATA, src);
-      curl_easy_setopt(src->m_curl, CURLOPT_FOLLOWLOCATION, (src->m_automaticRedirect ? 1 : 0));
-      curl_easy_setopt(src->m_curl, CURLOPT_USERAGENT, src->m_userAgent);
-      curl_easy_setopt(src->m_curl, CURLOPT_ERRORBUFFER, src->m_curlErrBuf);
-      curl_easy_setopt(src->m_curl, CURLOPT_FAILONERROR, 1L); //this will make curl report an error when http code greater or equal than 400 is returned
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_PROGRESSFUNCTION, gst_http_src_progress_callback);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_PROGRESSDATA, src);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_NOPROGRESS, 0);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_HEADERFUNCTION, gst_http_src_header_callback);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_HEADERDATA, src);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_URL, src->m_location);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_WRITEFUNCTION, gst_http_src_data_received );
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_WRITEDATA, src);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_FOLLOWLOCATION, (src->m_automaticRedirect ? 1 : 0));
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_USERAGENT, src->m_userAgent);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_ERRORBUFFER, src->m_curlErrBuf);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_FAILONERROR, 1L); //this will make curl report an error when http code greater or equal than 400 is returned
       if ( src->m_cookies )
       {
          int i= 0;
@@ -1521,37 +1533,37 @@ static void* gst_http_src_session_thread( void *arg )
             cookie= src->m_cookies[i];
             if ( cookie )
             {
-               curl_easy_setopt(src->m_curl, CURLOPT_COOKIELIST, cookie);
+               CURL_EASY_SETOPT(src->m_curl, CURLOPT_COOKIELIST, cookie);
             }
             ++i;
          }
          while( cookie );
       }
 
-      curl_easy_setopt(src->m_curl, CURLOPT_CONNECTTIMEOUT, src->m_timeout);
-      curl_easy_setopt(src->m_curl, CURLOPT_LOW_SPEED_TIME, src->m_timeout);
-      curl_easy_setopt(src->m_curl, CURLOPT_LOW_SPEED_LIMIT, 100);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_CONNECTTIMEOUT, src->m_timeout);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_LOW_SPEED_TIME, src->m_timeout);
+      CURL_EASY_SETOPT(src->m_curl, CURLOPT_LOW_SPEED_LIMIT, 100);
       GST_WARNING_OBJECT(src, "GSTHTTPSRC: Setting timeout - m_timeout %d", src->m_timeout);
 
       if ( src->m_proxy )
       {
-         curl_easy_setopt(src->m_curl, CURLOPT_PROXY, src->m_proxy);
+         CURL_EASY_SETOPT(src->m_curl, CURLOPT_PROXY, src->m_proxy);
          if ( src->m_proxyPassword )
          {
-            curl_easy_setopt(src->m_curl, CURLOPT_PROXYPASSWORD, src->m_proxyPassword);
+            CURL_EASY_SETOPT(src->m_curl, CURLOPT_PROXYPASSWORD, src->m_proxyPassword);
          }
          if ( src->m_proxyId )
          {
-            curl_easy_setopt(src->m_curl, CURLOPT_PROXYUSERNAME, src->m_proxyId);
+            CURL_EASY_SETOPT(src->m_curl, CURLOPT_PROXYUSERNAME, src->m_proxyId);
          }
       }
       if ( src->m_userPassword )
       {
-         curl_easy_setopt(src->m_curl, CURLOPT_PASSWORD, src->m_userPassword);
+         CURL_EASY_SETOPT(src->m_curl, CURLOPT_PASSWORD, src->m_userPassword);
       }
       if ( src->m_userId )
       {
-         curl_easy_setopt(src->m_curl, CURLOPT_USERNAME, src->m_userId );
+         CURL_EASY_SETOPT(src->m_curl, CURLOPT_USERNAME, src->m_userId );
       }
       if ( src->m_extraHeaders )
       {
@@ -1561,13 +1573,13 @@ static void* gst_http_src_session_thread( void *arg )
          }
          if ( src->m_slist )
          {
-            curl_easy_setopt(src->m_curl, CURLOPT_HTTPHEADER, src->m_slist);
+            CURL_EASY_SETOPT(src->m_curl, CURLOPT_HTTPHEADER, src->m_slist);
          }
       }
       if ( src->m_disableProcessSignaling )
       {
           GST_WARNING_OBJECT(src, "GSTHTTPSRC: Setting CURLOPT_NOSIGNAL = 1L");
-          curl_easy_setopt(src->m_curl, CURLOPT_NOSIGNAL, 1L);
+          CURL_EASY_SETOPT(src->m_curl, CURLOPT_NOSIGNAL, 1L);
       }
 
       /* Added these prints just to get the Tune Trend; Will be removed once 2.0 is matured */
@@ -1907,8 +1919,8 @@ static size_t gst_http_src_header_callback(char *buffer, size_t size, size_t nit
 
                   /* Once trailer is posted on bus disable low speed timeout limit and set to inifite timeout */ 
                   /* Connect timeout need not be reset */
-                  curl_easy_setopt(src->m_curl, CURLOPT_LOW_SPEED_TIME, 0);
-                  curl_easy_setopt(src->m_curl, CURLOPT_LOW_SPEED_LIMIT, 0);
+                  CURL_EASY_SETOPT(src->m_curl, CURLOPT_LOW_SPEED_TIME, 0);
+                  CURL_EASY_SETOPT(src->m_curl, CURLOPT_LOW_SPEED_LIMIT, 0);
                   GST_WARNING_OBJECT(src, "GSTHTTPSRC: Changing timeout - m_timeout %d", 0);
                }
                
@@ -1927,10 +1939,12 @@ static size_t gst_http_src_header_callback(char *buffer, size_t size, size_t nit
       }      
    }
       
-   if ( (len == 2) && (buffer[0] == '\r') && (buffer[1] == '\n')  )
-   {
-      src->m_haveHeaders= TRUE;
-   }
+   if(buffer != NULL) {
+      if ( (len == 2) && (buffer[0] == '\r') && (buffer[1] == '\n')  )
+      {
+         src->m_haveHeaders= TRUE;
+      }
+   }  //CID:18723 - Forward null
    
    curl_easy_getinfo(src->m_curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &contentLength );
    if ( contentLength >= 0 )
@@ -2019,15 +2033,18 @@ static size_t gst_http_src_header_callback(char *buffer, size_t size, size_t nit
       }
    }
 
-   if ( strncmp( buffer, "PresentationTimeStamps.ochn.org:", 32 ) == 0 )
+   if(buffer != NULL)
    {
-      gulong startPTS = 0, endPTS = 0;
-      if ( sscanf(&buffer[33], "startPTS=%08lx endPTS=%08lx", &startPTS, &endPTS) == 2 )
+      if ( strncmp( buffer, "PresentationTimeStamps.ochn.org:", 32 ) == 0 )
       {
-         src->m_startPTS= startPTS;
-         src->m_endPTS= endPTS;
+         gulong startPTS = 0, endPTS = 0;
+         if ( sscanf(&buffer[33], "startPTS=%08lx endPTS=%08lx", &startPTS, &endPTS) == 2 )
+         {
+            src->m_startPTS= startPTS;
+            src->m_endPTS= endPTS;
+         }
       }
-   } 
+   }   //CID:18723 - forward null 
 
    if ( strncmp( buffer, "FramesPerGOP.schange.com:", 25 ) == 0 )
    {

@@ -292,14 +292,14 @@ gst_dtcp_enc_change_state (GstElement * element, GstStateChange transition)
                 GST_ERROR_OBJECT(filter, "%s:: Error while creating DTCP SESSION.... \n",__FUNCTION__);
                 filter->pDtcpSession = 0;
             }
-            GST_DEBUG_OBJECT(filter, "%s:: filter->pDtcpSession = %p", __FUNCTION__, filter->pDtcpSession);
-        }
+            GST_DEBUG_OBJECT(filter, "%s:: filter->pDtcpSession = %lu", __FUNCTION__, filter->pDtcpSession);  //CID:28136 - Print args
+            filter->tspacketsize=0;
+            g_mutex_lock (packet_count_mutex);
+            packet_count = 0;
+            g_mutex_unlock (packet_count_mutex);
+            filter->isFirstPacket = TRUE;
+        }   //CID:18753 - Forward null
 
-        filter->tspacketsize=0;
-        g_mutex_lock (packet_count_mutex);
-        packet_count = 0;
-        g_mutex_unlock (packet_count_mutex);
-        filter->isFirstPacket = TRUE;
         break;
     }
     case GST_STATE_CHANGE_READY_TO_PAUSED:
@@ -597,7 +597,7 @@ gst_dtcp_enc_set_property (GObject * object, guint prop_id,
 		GST_ERROR_OBJECT(filter, "%s:: Error while creating DTCP SESSION.... \n",__FUNCTION__);
 		filter->pDtcpSession = 0;
   	  }
-  	  GST_INFO_OBJECT(filter, "%s:: filter->pDtcpSession = %p\n", __FUNCTION__, filter->pDtcpSession);
+  	  GST_INFO_OBJECT(filter, "%s:: filter->pDtcpSession = %lu\n", __FUNCTION__, filter->pDtcpSession);  //CID:28857 - Print args
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1217,20 +1217,24 @@ void onError(GstDtcpEnc* filter, int err_code, char* err_string)
     error = g_error_new (GST_CORE_ERROR, err_code, err_string);
     if (error == NULL)
         GST_ERROR("error null");
-    GstElement *parent= GST_ELEMENT_PARENT (filter);
-    message = gst_message_new_error (GST_OBJECT(parent), error, "DTCP AKE failed");
-    if (message == NULL)
-        GST_ERROR("DTCP error message creation failed");
+    if(filter){
+        GstElement *parent= GST_ELEMENT_PARENT (filter);    //CID:18616 - forward null
+        message = gst_message_new_error (GST_OBJECT(parent), error, "DTCP AKE failed");
+        if (message == NULL){
+           GST_ERROR("DTCP error message creation failed");
+        }
+        else {
+           if (GST_MESSAGE_TYPE (message) != GST_MESSAGE_ERROR)
+               GST_ERROR("DTCP error message type failed");
 
-    if (GST_MESSAGE_TYPE (message) != GST_MESSAGE_ERROR)
-        GST_ERROR("DTCP error message type failed");
+           if (GST_MESSAGE_SRC (message) == NULL)
+               GST_ERROR("DTCP error message src not found");
 
-    if (GST_MESSAGE_SRC (message) == NULL)
-        GST_ERROR("DTCP error message src not found");
-
-    if (gst_element_post_message (GST_ELEMENT (filter), message) == FALSE)
-    {
-        GST_ERROR("This element has no bus, therefore no message sent!");
+           if (gst_element_post_message (GST_ELEMENT (filter), message) == FALSE)
+           {
+               GST_ERROR("This element has no bus, therefore no message sent!");
+           }
+        }   //CID:18610 - Forward null
     }
     if (error)
         g_error_free (error);
@@ -1356,7 +1360,7 @@ gst_dtcp_enc_chain (GstPad * pad, GstBuffer * buf)
 
   if ((0 == dataLen) || (NULL == virtualAddress))
   {
-    GST_WARNING_OBJECT (filter, "The Incoming buffer for Encryption is either NULL or Empty... \n", __FUNCTION__);
+    GST_WARNING_OBJECT (filter, "%s :: The Incoming buffer for Encryption is either NULL or Empty... \n", __FUNCTION__);  //CID:42330 - Print args
     ret = GST_FLOW_OK;
     goto out;
   }
