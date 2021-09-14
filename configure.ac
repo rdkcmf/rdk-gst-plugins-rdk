@@ -161,6 +161,16 @@ AC_ARG_ENABLE([dtv],
     	      ],
     	      [echo "dtvsource plugin is disabled"])
 
+AC_ARG_ENABLE([aesmptsdec],
+              AS_HELP_STRING([--enable-aesmptsdec],[enable aesmptsdec plugin (default is no)]),
+              [
+      		case "${enableval}" in
+        	 yes) PLUGIN_SRC="$PLUGIN_SRC aesmptsdec";;
+        	 no)  echo "aesmptsdec plugin is disabled" ;;
+        	 *) AC_MSG_ERROR([bad value ${enableval} for --enable-aesmptsdec]) ;;
+       		esac
+    	      ],
+    	      [echo "aesmptsdec plugin is disabled"])
 #RMFMeta can be built only for GST-1.0
 AC_SUBST(PLUGIN_SRC)
 AC_SUBST(SUBDIRS)
@@ -175,5 +185,6 @@ AC_CONFIG_FILES([Makefile
                  src/httpsink/Makefile
                  src/httpsrc/Makefile
                  src/rbifilter/Makefile
-                 src/dtvsource/Makefile])
+                 src/dtvsource/Makefile
+                 src/aesmptsdec/Makefile])
 AC_OUTPUT
