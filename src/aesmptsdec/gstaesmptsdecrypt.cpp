@@ -1,3 +1,22 @@
+/*
+ * Copyright 2021 RDK Management
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation, version 2
+ * of the license.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+ */
+ 
 /**
  * SECTION:element-gstaesmptsdecrypt
  *
@@ -73,8 +92,6 @@ static void gst_aesmptsdecrypt_class_init(GstAesmptsdecryptClass *klass)
     GObjectClass *gobject_class = G_OBJECT_CLASS(klass);
     GstBaseTransformClass *base_transform_class = GST_BASE_TRANSFORM_CLASS(klass);
 
-    /* Setting up pads and setting metadata should be moved to
-       base_class_init if you intend to subclass this class. */
     gst_element_class_add_static_pad_template(GST_ELEMENT_CLASS(klass),
             &gst_aesmptsdecrypt_src_template);
     gst_element_class_add_static_pad_template(GST_ELEMENT_CLASS(klass),
