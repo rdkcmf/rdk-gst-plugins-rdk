@@ -39,6 +39,8 @@
 #define SPTS_BUFFER_SIZE   (188 * 4096)
 #define PAT_INTERVAL_MS    100
 #define SYNC_BYTE          0x47
+#define INVALID_PID        0x1fff
+#define INVALID_DVB_ID     0x10000
 
 
 static void gst_dtv_source_dispose(GObject * object);
@@ -108,7 +110,7 @@ static void gst_dtv_source_class_init(GstDtvSourceClass *klass)
          "number of the tuner to be used",
          "tuner number as a decimal integer",
          0, // min value
-         255, // max value
+         254, // max value
          0, // default value
          (GParamFlags)G_PARAM_READWRITE));
 
@@ -118,7 +120,7 @@ static void gst_dtv_source_class_init(GstDtvSourceClass *klass)
          "number of the demux to be used",
          "demux number as a decimal integer",
          0, // min value
-         255, // max value
+         254, // max value
          0, // default value
          (GParamFlags)G_PARAM_READWRITE));
 
@@ -138,7 +140,7 @@ static void gst_dtv_source_class_init(GstDtvSourceClass *klass)
          "PID of the PMT for the service in the SPTS",
          "PMT PID as a decimal integer",
          0, // min value
-         65535, // max value
+         8190, // max value
          0, // default value
          (GParamFlags)G_PARAM_READWRITE));
 
@@ -173,10 +175,11 @@ static void gst_dtv_source_class_init(GstDtvSourceClass *klass)
 
 static void gst_dtv_source_init(GstDtvSource *src)
 {
-   src->tuner = 0;
-   src->demux = 0;
-   src->service_id = 0;
-   src->pmt_pid = 0;
+   src->tuner = (guint)-1;
+   src->demux = (guint)-1;
+   src->service_id = INVALID_DVB_ID;
+   src->pmt_pid = INVALID_PID;
+   src->pmt_updated = false;
 
    src->dvr_fd = -1;
    src->offset = 0;
@@ -254,8 +257,12 @@ static void gst_dtv_source_set_property(GObject *object, guint prop_id, const GV
          break;
 
       case PROPERTY_PMT_PID:
-         dtvsrc->pmt_pid = g_value_get_uint(value);
-         GST_INFO_OBJECT(dtvsrc, "gst_dtv_source_set_property: pmt-pid=%u", dtvsrc->pmt_pid);
+         if (dtvsrc->pmt_pid != g_value_get_uint(value))
+         {
+            dtvsrc->pmt_pid = g_value_get_uint(value);
+            dtvsrc->pmt_updated = true;
+            GST_INFO_OBJECT(dtvsrc, "gst_dtv_source_set_property: pmt-pid=%u", dtvsrc->pmt_pid);
+         }
          break;
 
       default:
@@ -324,56 +331,52 @@ static gboolean gst_dtv_source_start(GstBaseSrc * bsrc)
    gboolean result;
    gchar dvr_name[64];
    int rc;
-   errno_t safec_rc = -1;
+   errno_t safec_rc;
 
-   GST_DEBUG_OBJECT(dtvsrc, "gst_dtv_source_start: tuner %u, demux %u", dtvsrc->tuner, dtvsrc->demux);
+   GST_INFO_OBJECT(dtvsrc, "gst_dtv_source_start: tuner %u, demux %u", dtvsrc->tuner, dtvsrc->demux);
 
-    safec_rc = sprintf_s(dvr_name, sizeof(dvr_name), "/dev/dvb/adapter%u/dvr0", dtvsrc->tuner);
-    if(safec_rc < EOK)
-    {
-       ERR_CHK(safec_rc);
-       return FALSE;
-    }
-   if ((dtvsrc->dvr_fd = open(dvr_name, O_RDONLY)) >= 0)
+   result = FALSE;
+
+   safec_rc = sprintf_s(dvr_name, sizeof(dvr_name), "/dev/dvb/adapter%u/dvr0", dtvsrc->tuner);
+   if (safec_rc >= EOK)
    {
-      dtvsrc->offset = 0;
-
-      dtvsrc->last_pat_timestamp = 0;
-      dtvsrc->pat_count = 0;
-
-      dtvsrc->pat_version++;
-
-      /* Create a PAT for the service */
-      GST_INFO_OBJECT(dtvsrc, "gst_dtv_source_start: service=%u, pmt_pid=%u", dtvsrc->service_id, dtvsrc->pmt_pid);
-
-      dtv_source_create_pat(dtvsrc->current_pat, dtvsrc->service_id, dtvsrc->pmt_pid, dtvsrc->pat_version);
-
-      /* Start a task to read the data */
-      dtvsrc->stop_thread = FALSE;
-
-      if ((rc = pthread_create(&dtvsrc->read_thread, NULL, gst_dtv_read_data_thread, dtvsrc)) != 0)
+      if ((dtvsrc->dvr_fd = open(dvr_name, O_RDONLY)) >= 0)
       {
-         GST_ELEMENT_ERROR(dtvsrc, CORE, THREAD,
-            (("Failed to create thread to read SPTS data")),
-            ("Failed to create thread to read SPTS data"));
+         dtvsrc->offset = 0;
 
-         close(dtvsrc->dvr_fd);
-         dtvsrc->dvr_fd = -1;
+         dtvsrc->last_pat_timestamp = 0;
+         dtvsrc->pat_count = 0;
 
-         result = FALSE;
+         /* Create a PAT for the service */
+         GST_INFO_OBJECT(dtvsrc, "gst_dtv_source_start: service=%u, pmt_pid=%u", dtvsrc->service_id, dtvsrc->pmt_pid);
+
+         /* Start a task to read the data */
+         dtvsrc->stop_thread = FALSE;
+
+         if ((rc = pthread_create(&dtvsrc->read_thread, NULL, gst_dtv_read_data_thread, dtvsrc)) != 0)
+         {
+            GST_ELEMENT_ERROR(dtvsrc, CORE, THREAD,
+               (("Failed to create thread to read SPTS data")),
+               ("Failed to create thread to read SPTS data"));
+
+            close(dtvsrc->dvr_fd);
+            dtvsrc->dvr_fd = -1;
+         }
+         else
+         {
+            result = TRUE;
+         }
       }
       else
       {
-         result = TRUE;
+         GST_ELEMENT_ERROR(dtvsrc, RESOURCE, OPEN_READ,
+            (("Failed to open %s, errno %d"), dvr_name, errno),
+            (("Failed to open the DVR device %s, errno %d"), dvr_name, errno));
       }
    }
    else
    {
-      GST_ELEMENT_ERROR(dtvsrc, RESOURCE, OPEN_READ,
-         (("Failed to open %s, errno %d"), dvr_name, errno),
-         (("Failed to open the DVR device %s, errno %d"), dvr_name, errno));
-
-      result = FALSE;
+      ERR_CHK(safec_rc);
    }
 
    return result;
@@ -383,7 +386,7 @@ static gboolean gst_dtv_source_stop(GstBaseSrc * bsrc)
 {
    GstDtvSource *dtvsrc = GST_DTV_SOURCE(bsrc);
 
-   GST_DEBUG_OBJECT(dtvsrc, "gst_dtv_source_stop: dvr_fd=%d", dtvsrc->dvr_fd);
+   GST_INFO_OBJECT(dtvsrc, "gst_dtv_source_stop: dvr_fd=%d", dtvsrc->dvr_fd);
 
    if (dtvsrc->dvr_fd >= 0)
    {
@@ -409,6 +412,7 @@ static GstFlowReturn gst_dtv_source_create(GstPushSrc *src, GstBuffer **buffer)
    guint blocksize;
    guint bytes_available;
    GstBuffer *spts_buffer;
+   struct timespec ts;
    GstFlowReturn retval;
 
    dtvsrc = GST_DTV_SOURCE(src);
@@ -422,58 +426,109 @@ static GstFlowReturn gst_dtv_source_create(GstPushSrc *src, GstBuffer **buffer)
 
       /* Wait for data to be available in the buffer */
       pthread_mutex_lock(&dtvsrc->buffer_mutex);
-      pthread_cond_wait(&dtvsrc->data_in_buffer, &dtvsrc->buffer_mutex);
 
-      if (dtvsrc->write_ptr >= dtvsrc->read_ptr)
+      /* Wait for upto 500 msec for data to arrive */
+      clock_gettime(CLOCK_REALTIME, &ts);
+      ts.tv_nsec += 500000000;
+      if (ts.tv_nsec >= 1000000000)
       {
-         bytes_available = dtvsrc->write_ptr - dtvsrc->read_ptr;
+         ts.tv_sec++;
+         ts.tv_nsec -= 1000000000;
+      }
+
+      if (pthread_cond_timedwait(&dtvsrc->data_in_buffer, &dtvsrc->buffer_mutex, &ts) != ETIMEDOUT)
+      {
+         if (dtvsrc->write_ptr >= dtvsrc->read_ptr)
+         {
+            bytes_available = dtvsrc->write_ptr - dtvsrc->read_ptr;
+         }
+         else
+         {
+            bytes_available = dtvsrc->buffer_end - dtvsrc->read_ptr;
+         }
+
+         if (bytes_available == 0)
+         {
+            /* Data is available but read == write which means the buffer is full */
+            bytes_available = dtvsrc->buffer_size;
+            GST_DEBUG_OBJECT(dtvsrc, "gst_dtv_source_create: Buffer is full");
+         }
+
+         if (bytes_available < blocksize)
+         {
+            blocksize = bytes_available;
+         }
+         else
+         {
+            /* Return as many whole blocks as are available */
+            blocksize = (bytes_available / blocksize) * blocksize;
+         }
+
+         dtvsrc->space_in_buffer += blocksize;
+
+         pthread_mutex_unlock(&dtvsrc->buffer_mutex);
+
+         if (blocksize != 0)
+         {
+            spts_buffer = gst_buffer_new_wrapped_full((GST_MEMORY_FLAG_READONLY | GST_MEMORY_FLAG_NOT_MAPPABLE),
+               dtvsrc->read_ptr, blocksize, 0, blocksize, NULL, NULL);
+            if (spts_buffer != NULL)
+            {
+               GST_BUFFER_FLAG_SET(spts_buffer, GST_BUFFER_FLAG_LIVE);
+
+               GST_BUFFER_OFFSET(spts_buffer) = dtvsrc->offset;
+               dtvsrc->offset += blocksize;
+               GST_BUFFER_OFFSET_END(spts_buffer) = dtvsrc->offset;
+
+               pthread_mutex_lock(&dtvsrc->buffer_mutex);
+
+               if ((dtvsrc->read_ptr += blocksize) == dtvsrc->buffer_end)
+               {
+                  dtvsrc->read_ptr = dtvsrc->buffer_start;
+               }
+
+               pthread_mutex_unlock(&dtvsrc->buffer_mutex);
+
+               *buffer = spts_buffer;
+               retval = GST_FLOW_OK;
+            }
+            else
+            {
+               GST_ELEMENT_ERROR(dtvsrc, RESOURCE, NO_SPACE_LEFT,
+                  (("Failed to create a new buffer")),
+                  (("")));
+            }
+         }
+         else
+         {
+            if (dtvsrc->stop_thread)
+            {
+               GST_DEBUG_OBJECT(dtvsrc, "gst_dtv_source_create: No data left in buffer, pushing EOS");
+               gst_pad_push_event(dtvsrc->parent.parent.srcpad, gst_event_new_eos());
+            }
+            else
+            {
+               GST_DEBUG_OBJECT(dtvsrc, "gst_dtv_source_create: No data left in buffer");
+            }
+
+            GST_ELEMENT_ERROR(dtvsrc, RESOURCE, NOT_FOUND,
+               (("No data in the buffer")),
+               (("")));
+         }
       }
       else
       {
-         bytes_available = dtvsrc->buffer_end - dtvsrc->read_ptr;
-      }
+         pthread_mutex_unlock(&dtvsrc->buffer_mutex);
 
-      if (bytes_available == 0)
-      {
-         /* Data is available but read == write which means the buffer is full */
-         bytes_available = dtvsrc->buffer_size;
-         GST_DEBUG_OBJECT(dtvsrc, "gst_dtv_source_create: Buffer is full");
-      }
-
-      if (bytes_available < blocksize)
-      {
-         blocksize = bytes_available;
-      }
-      else
-      {
-         /* Return as many whole blocks as are available */
-         blocksize = (bytes_available / blocksize) * blocksize;
-      }
-
-      dtvsrc->space_in_buffer += blocksize;
-
-      pthread_mutex_unlock(&dtvsrc->buffer_mutex);
-
-      if (blocksize != 0)
-      {
+         /* No data available so just return an empty buffer to maintain the flow */
          spts_buffer = gst_buffer_new_wrapped_full((GST_MEMORY_FLAG_READONLY | GST_MEMORY_FLAG_NOT_MAPPABLE),
-            dtvsrc->read_ptr, blocksize, 0, blocksize, NULL, NULL);
+            dtvsrc->read_ptr, 0, 0, 0, NULL, NULL);
          if (spts_buffer != NULL)
          {
             GST_BUFFER_FLAG_SET(spts_buffer, GST_BUFFER_FLAG_LIVE);
 
             GST_BUFFER_OFFSET(spts_buffer) = dtvsrc->offset;
-            dtvsrc->offset += blocksize;
             GST_BUFFER_OFFSET_END(spts_buffer) = dtvsrc->offset;
-
-            pthread_mutex_lock(&dtvsrc->buffer_mutex);
-
-            if ((dtvsrc->read_ptr += blocksize) == dtvsrc->buffer_end)
-            {
-               dtvsrc->read_ptr = dtvsrc->buffer_start;
-            }
-
-            pthread_mutex_unlock(&dtvsrc->buffer_mutex);
 
             *buffer = spts_buffer;
             retval = GST_FLOW_OK;
@@ -484,22 +539,6 @@ static GstFlowReturn gst_dtv_source_create(GstPushSrc *src, GstBuffer **buffer)
                (("Failed to create a new buffer")),
                (("")));
          }
-      }
-      else
-      {
-         if (dtvsrc->stop_thread)
-         {
-            GST_DEBUG_OBJECT(dtvsrc, "gst_dtv_source_create: No data left in buffer, pushing EOS");
-            gst_pad_push_event(dtvsrc->parent.parent.srcpad, gst_event_new_eos());
-         }
-         else
-         {
-            GST_DEBUG_OBJECT(dtvsrc, "gst_dtv_source_create: No data left in buffer");
-         }
-
-         GST_ELEMENT_ERROR(dtvsrc, RESOURCE, NOT_FOUND,
-            (("No data in the buffer")),
-            (("")));
       }
    }
    else
@@ -672,7 +711,7 @@ static void* gst_dtv_read_data_thread(void *arg)
    int nbytes;
    gint64 current_time;
    gboolean full_packet;
-   errno_t rc = -1;
+   errno_t rc;
 #ifdef SPTS_FILENAME
    char filename[32];
    FILE *fp;
@@ -682,7 +721,7 @@ static void* gst_dtv_read_data_thread(void *arg)
 
 #ifdef SPTS_FILENAME
    rc = sprintf_s(filename, sizeof(filename), "%s_%u.ts", SPTS_FILENAME, dtvsrc->pmt_pid);
-   if (rc == EOK)
+   if (rc >= EOK)
    {
       if ((fp = fopen(filename, "w")) == NULL)
       {
@@ -697,106 +736,124 @@ static void* gst_dtv_read_data_thread(void *arg)
    blocksize = gst_base_src_get_blocksize(GST_BASE_SRC(dtvsrc));
 
    /* Keep reading data until requested to stop.
-    * The data is read is 'blocksize' chunks as this is what will be used to fill the GstBuffers */
+    * The data read is 'blocksize' chunks as this is what will be used to fill the GstBuffers */
    while (!dtvsrc->stop_thread)
    {
-      if (dtvsrc->write_ptr + blocksize > dtvsrc->buffer_end)
+      if (dtvsrc->pmt_updated && (dtvsrc->pmt_pid != INVALID_PID) && (dtvsrc->service_id != INVALID_DVB_ID))
       {
-         bytes_to_read = dtvsrc->buffer_end - dtvsrc->write_ptr;
+         dtvsrc->pat_version++;
+
+         /* Create or update the PAT */
+         dtv_source_create_pat(dtvsrc->current_pat, dtvsrc->service_id, dtvsrc->pmt_pid, dtvsrc->pat_version);
+
+         dtvsrc->pmt_updated = false;
       }
-      else
+
+      if ((dtvsrc->pmt_pid != INVALID_PID) && (dtvsrc->service_id != INVALID_DVB_ID))
       {
-         bytes_to_read = blocksize;
-      }
-
-      if ((nbytes = read(dtvsrc->dvr_fd, dtvsrc->write_ptr, bytes_to_read)) > 0)
-      {
-#ifdef SPTS_FILENAME
-         if (fp != NULL)
-            fwrite(dtvsrc->write_ptr, 1, nbytes, fp);
-#endif
-
-         pthread_mutex_lock(&dtvsrc->buffer_mutex);
-
-         if (dtvsrc->space_in_buffer < nbytes)
+         if (dtvsrc->write_ptr + blocksize > dtvsrc->buffer_end)
          {
-            GST_DEBUG_OBJECT(dtvsrc, "%s: Buffer has OVERFLOWED!", __FUNCTION__);
-            dtvsrc->space_in_buffer = 0;
+            bytes_to_read = dtvsrc->buffer_end - dtvsrc->write_ptr;
          }
          else
          {
-            dtvsrc->space_in_buffer -= nbytes;
+            bytes_to_read = blocksize;
          }
 
-         dtvsrc->write_ptr += nbytes;
-
-         /* Check whether the last data read was a complete TS packet by looking for a TS sync byte
-          * as the first byte in the 2 last packets in the buffer. Two packets are checked because
-          * the chance of the sync byte value being in two locations is less than just checking for
-          * one occurrence */
-         if ((nbytes >= TSPKT_SIZE * 2) &&
-            (*(dtvsrc->write_ptr - TSPKT_SIZE) == SYNC_BYTE) &&
-            (*(dtvsrc->write_ptr - 2 * TSPKT_SIZE) == SYNC_BYTE))
+         if ((nbytes = read(dtvsrc->dvr_fd, dtvsrc->write_ptr, bytes_to_read)) > 0)
          {
-            full_packet = TRUE;
-         }
-         else
-         {
-            full_packet = FALSE;
-         }
-
-         if (dtvsrc->write_ptr == dtvsrc->buffer_end)
-         {
-            dtvsrc->write_ptr = dtvsrc->buffer_start;
-         }
-
-         current_time = dtv_source_get_clock_msecs();
-
-         /* Check whether it's time to inject another PAT, but only do it this time if there's
-          * enough space and the last data received was a full TS packet, otherwise it will be
-          * done next time */
-         if (full_packet && ((current_time - dtvsrc->last_pat_timestamp) >= PAT_INTERVAL_MS) &&
-            (dtvsrc->space_in_buffer >= TSPKT_SIZE) &&
-            (dtvsrc->buffer_end - dtvsrc->write_ptr >= TSPKT_SIZE))
-         {
-            /* Time to inject a PAT.
-             * Just need to update the continuity counter, before using it */
-            dtvsrc->current_pat[3] = 0x10 | (dtvsrc->pat_count & 0x0F);
-
-            rc = memcpy_s(dtvsrc->write_ptr, TSPKT_SIZE, dtvsrc->current_pat, TSPKT_SIZE);
-            if(rc != EOK)
-            {
-                ERR_CHK(rc);
-                return; 
-            }
-
-            dtvsrc->last_pat_timestamp = current_time;
-            dtvsrc->pat_count++;
-
 #ifdef SPTS_FILENAME
             if (fp != NULL)
-               fwrite(dtvsrc->write_ptr, 1, TSPKT_SIZE, fp);
+               fwrite(dtvsrc->write_ptr, 1, nbytes, fp);
 #endif
-            dtvsrc->space_in_buffer -= TSPKT_SIZE;
-            dtvsrc->write_ptr += TSPKT_SIZE;
+
+            pthread_mutex_lock(&dtvsrc->buffer_mutex);
+
+            if (dtvsrc->space_in_buffer < nbytes)
+            {
+               GST_DEBUG_OBJECT(dtvsrc, "%s: Buffer has OVERFLOWED!", __FUNCTION__);
+               dtvsrc->space_in_buffer = 0;
+            }
+            else
+            {
+               dtvsrc->space_in_buffer -= nbytes;
+            }
+
+            dtvsrc->write_ptr += nbytes;
+
+            /* Check whether the last data read was a complete TS packet by looking for a TS sync byte
+             * as the first byte in the 2 last packets in the buffer. Two packets are checked because
+             * the chance of the sync byte value being in two locations is less than just checking for
+             * one occurrence */
+            if ((nbytes >= TSPKT_SIZE * 2) &&
+               (*(dtvsrc->write_ptr - TSPKT_SIZE) == SYNC_BYTE) &&
+               (*(dtvsrc->write_ptr - 2 * TSPKT_SIZE) == SYNC_BYTE))
+            {
+               full_packet = TRUE;
+            }
+            else
+            {
+               full_packet = FALSE;
+            }
 
             if (dtvsrc->write_ptr == dtvsrc->buffer_end)
             {
                dtvsrc->write_ptr = dtvsrc->buffer_start;
             }
+
+            current_time = dtv_source_get_clock_msecs();
+
+            /* Check whether it's time to inject another PAT, but only do it this time if there's
+             * enough space and the last data received was a full TS packet, otherwise it will be
+             * done next time */
+            if (full_packet && ((current_time - dtvsrc->last_pat_timestamp) >= PAT_INTERVAL_MS) &&
+               (dtvsrc->space_in_buffer >= TSPKT_SIZE) &&
+               (dtvsrc->buffer_end - dtvsrc->write_ptr >= TSPKT_SIZE))
+            {
+               /* Time to inject a PAT.
+                * Just need to update the continuity counter, before using it */
+               dtvsrc->current_pat[3] = 0x10 | (dtvsrc->pat_count & 0x0F);
+
+               rc = memcpy_s(dtvsrc->write_ptr, TSPKT_SIZE, dtvsrc->current_pat, TSPKT_SIZE);
+               if (rc >= EOK)
+               {
+                  dtvsrc->last_pat_timestamp = current_time;
+                  dtvsrc->pat_count++;
+
+#ifdef SPTS_FILENAME
+                  if (fp != NULL)
+                     fwrite(dtvsrc->write_ptr, 1, TSPKT_SIZE, fp);
+#endif
+                  dtvsrc->space_in_buffer -= TSPKT_SIZE;
+                  dtvsrc->write_ptr += TSPKT_SIZE;
+
+                  if (dtvsrc->write_ptr == dtvsrc->buffer_end)
+                  {
+                     dtvsrc->write_ptr = dtvsrc->buffer_start;
+                  }
+               }
+               else
+               {
+                  ERR_CHK(rc);
+               }
+            }
+
+            pthread_mutex_unlock(&dtvsrc->buffer_mutex);
+
+            if ((dtvsrc->buffer_size - dtvsrc->space_in_buffer) >= blocksize)
+            {
+               /* Signal that data is available to be read */
+               pthread_cond_signal(&dtvsrc->data_in_buffer);
+            }
          }
-
-         pthread_mutex_unlock(&dtvsrc->buffer_mutex);
-
-         if ((dtvsrc->buffer_size - dtvsrc->space_in_buffer) >= blocksize)
+         else if (nbytes < 0)
          {
-            /* Signal that data is available to be read */
-            pthread_cond_signal(&dtvsrc->data_in_buffer);
+            GST_DEBUG_OBJECT(dtvsrc, "%s: read returned %d, errno %d", __FUNCTION__, nbytes, errno);
          }
       }
-      else if (nbytes < 0)
+      else
       {
-         GST_DEBUG_OBJECT(dtvsrc, "%s: read returned %d, errno %d", __FUNCTION__, nbytes, errno);
+         GST_INFO_OBJECT(dtvsrc, "%s: Waiting for PMT PID & service ID", __FUNCTION__);
       }
    }
 
@@ -909,7 +966,7 @@ GST_PLUGIN_DEFINE (
     dtvsource,
     "Outputs SPTS data from a DVB tuner",
     dtvsource_init,
-    "1.0", //VERSION,
+    "1.1", //VERSION,
     "LGPL",
     "dtvkit-gst-plugins",
     "https://dtvkit.org")

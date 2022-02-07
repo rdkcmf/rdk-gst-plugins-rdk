@@ -56,6 +56,7 @@ typedef struct
    guint demux;
    guint service_id;
    guint pmt_pid;
+   gboolean pmt_updated;
 
    int dvr_fd;
    long long offset;    /* Value set in the GstBuffer */
